@@ -19,3 +19,7 @@ jobs:
       - run: npm run build
       - run: node verify/run.mjs
       - run: node verify/worker.mjs
+
+# NOTE: rename to .github/workflows/ci.yml to enable.
+# It could not be committed directly because the GitHub App in use lacks the
+# `workflows` permission.
