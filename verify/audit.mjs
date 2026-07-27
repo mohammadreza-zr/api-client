@@ -20,7 +20,7 @@ function check(name, cond, detail = "") {
 }
 
 const { server } = await start(4610);
-const api = createClient({ baseUrl: BASE, worker: false, refreshSkewMs: 0 });
+const api = createClient({ baseUrl: BASE, worker: false, refreshSkewMs: 0, throwError: false });
 
 try {
   // ── 1. Binary / upload integrity ──────────────────────
@@ -99,7 +99,7 @@ try {
 
   // Upload surviving a 401 → refresh → retry. Needs a seeded refresh token,
   // otherwise the client short-circuits (correctly) without attempting refresh.
-  const authed = createClient({ baseUrl: BASE, worker: false, refreshSkewMs: 0 });
+  const authed = createClient({ baseUrl: BASE, worker: false, refreshSkewMs: 0, throwError: false });
   await authed.setTokens({ accessToken: "old", refreshToken: "refresh-1" });
   const fd2 = new FormData();
   fd2.append("file", new File(["RETRYBODY"], "b.txt"), "b.txt");

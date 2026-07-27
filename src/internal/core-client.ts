@@ -14,6 +14,18 @@ import { detectBaseUrl } from "./env";
 import { resolveStorage } from "./storage";
 import { joinUrl } from "./url";
 
+/** Reads a single cookie value by name. */
+function readCookie(name: string): string | undefined {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]*)`));
+  if (!match) return undefined;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
 /**
  * The full client implementation.
  *
@@ -32,6 +44,9 @@ export class CoreClient {
   private defaultHeaders: Record<string, string>;
   private extractTokens: NonNullable<ClientOptions["extractTokens"]>;
   private buildRefreshBody: NonNullable<ClientOptions["buildRefreshBody"]>;
+  private xsrfCookieName?: string;
+  private xsrfHeaderName: string;
+  private csrfProvider?: () => string | undefined;
   private hooks: Pick<ClientOptions, "onAuthStateChanged" | "onAuthFailure" | "onError" | "onLog">;
   private hydrated: Promise<void>;
   private disposed = false;
@@ -51,6 +66,9 @@ export class CoreClient {
     };
 
     this.defaultHeaders = { "Content-Type": "application/json", ...options.headers };
+    this.xsrfCookieName = options.xsrfCookieName;
+    this.xsrfHeaderName = options.xsrfHeaderName ?? "X-CSRF-Token";
+    this.csrfProvider = options.getCsrfToken;
     this.extractTokens = options.extractTokens ?? defaultExtractTokens;
     this.buildRefreshBody = options.buildRefreshBody ?? ((refresh) => (refresh ? { refresh } : {}));
     this.hooks = {
@@ -102,14 +120,37 @@ export class CoreClient {
       authMode: this.opts.authMode,
       getAccessToken: () => this.auth.accessToken,
       refresh: () => this.refresh(),
-      shouldPreemptivelyRefresh: () => {
-        if (this.opts.refreshSkewMs <= 0) return false;
+      shouldPreemptivelyRefresh: (skewMs?: number) => {
+        // A per-request skew (long uploads) overrides the client default and
+        // works even when the client-wide check is disabled.
+        const window = skewMs ?? this.opts.refreshSkewMs;
+        if (window <= 0) return false;
         if (this.opts.authMode === "cookie") return false;
         if (!this.auth.accessToken || !this.auth.refreshToken) return false;
-        return this.auth.isExpired(this.opts.refreshSkewMs);
+        return this.auth.isExpired(window);
       },
+      getCsrfToken: () => this.readCsrfToken(),
+      csrfHeaderName: this.xsrfHeaderName,
       onLog: this.hooks.onLog,
     };
+  }
+
+  /**
+   * Resolves the CSRF token.
+   *
+   * An explicit provider wins, since `document.cookie` does not exist inside a
+   * Web Worker or on the server — that is exactly when `getCsrfToken` is needed.
+   */
+  private readCsrfToken(): string | undefined {
+    if (this.csrfProvider) {
+      try {
+        return this.csrfProvider();
+      } catch {
+        return undefined;
+      }
+    }
+    if (!this.xsrfCookieName || typeof document === "undefined") return undefined;
+    return readCookie(this.xsrfCookieName);
   }
 
   /**

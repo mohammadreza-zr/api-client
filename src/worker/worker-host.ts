@@ -28,6 +28,9 @@ export class WorkerHost {
   private listeners = new Set<(state: AuthState) => void>();
   private hooks: Pick<ClientOptions, "onAuthStateChanged" | "onAuthFailure" | "onError" | "onLog">;
   private lastState: AuthState = { isAuthenticated: false, expiresAt: null };
+  private xsrfCookieName?: string;
+  private xsrfHeaderName: string;
+  private csrfProvider?: () => string | undefined;
 
   constructor(options: ClientOptions) {
     this.hooks = {
@@ -36,6 +39,12 @@ export class WorkerHost {
       onError: options.onError,
       onLog: options.onLog,
     };
+
+    // CSRF is resolved here, not in the worker: `document.cookie` only exists
+    // on the main thread, and a provider function cannot be cloned across.
+    this.xsrfCookieName = options.xsrfCookieName;
+    this.xsrfHeaderName = options.xsrfHeaderName ?? "X-CSRF-Token";
+    this.csrfProvider = options.getCsrfToken;
 
     const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
     this.objectUrl = URL.createObjectURL(blob);
@@ -144,6 +153,26 @@ export class WorkerHost {
 
   // ── requests ───────────────────────────────────────────
 
+  /** Reads the CSRF token on the main thread, where cookies are visible. */
+  private csrfToken(): string | undefined {
+    if (this.csrfProvider) {
+      try {
+        return this.csrfProvider();
+      } catch {
+        return undefined;
+      }
+    }
+    if (!this.xsrfCookieName || typeof document === "undefined") return undefined;
+    const escaped = this.xsrfCookieName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]*)`));
+    if (!match) return undefined;
+    try {
+      return decodeURIComponent(match[1]);
+    } catch {
+      return match[1];
+    }
+  }
+
   private async request<R>(
     method: HttpMethod,
     url: string,
@@ -154,10 +183,41 @@ export class WorkerHost {
 
     const payload = beforeFunc ? beforeFunc(body) : body;
 
+    // A ReadableStream cannot be structured-cloned into the worker. Rather
+    // than let postMessage throw an opaque DataCloneError, say so plainly.
+    if (typeof ReadableStream !== "undefined" && payload instanceof ReadableStream) {
+      const failure: IRes<R> = {
+        statusCode: 0,
+        status: false,
+        message:
+          "A ReadableStream body cannot be sent through a Web Worker. " +
+          "Create this client with `worker: false`, or send a Blob/File/FormData instead.",
+        loading: false,
+        error: new Error("Stream body is not transferable to a worker"),
+      };
+      if (!config?.hideErrorMessage) this.hooks.onError?.(failure);
+      return failure;
+    }
+
+    // Mirror the CSRF cookie into a header before the config crosses over.
+    let forwarded = serializable;
+    if (method !== "GET") {
+      const csrf = this.csrfToken();
+      if (csrf) {
+        const existing = forwarded?.headers ?? {};
+        const alreadySet = Object.keys(existing).some(
+          (k) => k.toLowerCase() === this.xsrfHeaderName.toLowerCase(),
+        );
+        if (!alreadySet) {
+          forwarded = { ...forwarded, headers: { ...existing, [this.xsrfHeaderName]: csrf } };
+        }
+      }
+    }
+
     let result: IRes<R>;
     try {
       result = await this.call<IRes<R>>(
-        (id) => ({ kind: "request", id, method, url, body: payload, config: serializable }),
+        (id) => ({ kind: "request", id, method, url, body: payload, config: forwarded }),
         signal,
       );
     } catch (error) {
@@ -262,6 +322,9 @@ function toSerializableOptions(options: ClientOptions): SerializableOptions {
     onError: _c,
     onLog: _d,
     worker: _e,
+    // A function cannot be structured-cloned; the host resolves the token and
+    // forwards the resulting string with each request instead.
+    getCsrfToken: _f,
     ...rest
   } = options;
 

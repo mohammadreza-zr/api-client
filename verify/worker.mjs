@@ -135,6 +135,7 @@ try {
     baseUrl: BASE,
     multiTab: false,
     refreshSkewMs: 0,
+    throwError: false, // envelope style — this suite asserts on result objects
     onAuthStateChanged: (s) => states.push(s.isAuthenticated),
   });
 
@@ -236,6 +237,46 @@ try {
     workerOptOut = false;
   }
   check("worker: per-request throwError:false overrides default", workerOptOut);
+
+  strict.destroy();
+
+  // ── CSRF must work in worker mode, where document.cookie does not exist ──
+  const csrfApi = createClient({
+    baseUrl: BASE,
+    refreshSkewMs: 0,
+    throwError: false,
+    getCsrfToken: () => "worker-csrf-1", // a function cannot be cloned into the worker
+    onError: () => {},
+  });
+  check("worker mode engaged with a CSRF provider", csrfApi.isWorker === true);
+
+  const csrfEcho = await csrfApi.post("/echo", { a: 1 });
+  check(
+    "worker: CSRF header reaches the server",
+    csrfEcho.data?.csrf === "worker-csrf-1",
+    `got ${csrfEcho.data?.csrf}`,
+  );
+
+  const csrfGet = await csrfApi.get("/echo");
+  check("worker: GET carries no CSRF header", !csrfGet.data?.csrf, `got ${csrfGet.data?.csrf}`);
+
+  // A stream cannot be structured-cloned; the failure must be legible.
+  const streamRes = await csrfApi.post(
+    "/echo",
+    new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode("x"));
+        c.close();
+      },
+    }),
+  );
+  check(
+    "worker: stream body fails with a clear message, not DataCloneError",
+    streamRes.status === false && /worker: false|Blob\/File\/FormData/i.test(streamRes.message),
+    streamRes.message,
+  );
+
+  csrfApi.destroy();
 
   strict.destroy();
 } catch (e) {

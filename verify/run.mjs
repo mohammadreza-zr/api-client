@@ -31,7 +31,8 @@ try {
 
   // ── basics ──────────────────────────────────────────────
   console.log("\nrequests");
-  const api = createClient({ baseUrl: BASE, worker: false, refreshSkewMs: 0 });
+  // throwError:false → envelope style, which is what this suite asserts.
+  const api = createClient({ baseUrl: BASE, worker: false, refreshSkewMs: 0, throwError: false });
   check("runs main-thread on server", api.isWorker === false);
 
   const echo = await api.get("/echo", { params: { a: 1, nested: { b: 2 }, list: [1, 2] } });
@@ -55,7 +56,7 @@ try {
   // ── errors ──────────────────────────────────────────────
   console.log("\nerrors");
   let errSeen = null;
-  const errApi = createClient({ baseUrl: BASE, worker: false, onError: (e) => (errSeen = e) });
+  const errApi = createClient({ baseUrl: BASE, worker: false, throwError: false, onError: (e) => (errSeen = e) });
   const boom = await errApi.get("/boom");
   check("500 does not throw", boom.status === false && boom.statusCode === 500);
   check("onError fired", errSeen?.statusCode === 500);
@@ -104,6 +105,7 @@ try {
     baseUrl: BASE,
     worker: false,
     multiTab: false,
+    throwError: false,
     onAuthStateChanged: (s) => authStates.push(s.isAuthenticated),
   });
 
@@ -146,6 +148,7 @@ try {
     baseUrl: BASE,
     worker: false,
     multiTab: false,
+    throwError: false,
     onAuthFailure: () => (failed = true),
   });
   await failing.setTokens({ accessToken: "expired-now", refreshToken: "wrong" });
@@ -156,7 +159,7 @@ try {
   // proactive refresh
   console.log("\nproactive refresh");
   state.refreshCalls = 0;
-  const eager = createClient({ baseUrl: BASE, worker: false, multiTab: false, refreshSkewMs: 120_000 });
+  const eager = createClient({ baseUrl: BASE, worker: false, multiTab: false, refreshSkewMs: 120_000, throwError: false });
   await eager.login({ password: "good" });
   await eager.get("/protected");
   check("refreshes before expiry without a 401", state.refreshCalls === 1, `got ${state.refreshCalls}`);
@@ -177,7 +180,7 @@ try {
   check("getTokenExpiry on opaque token → null", getTokenExpiry("not-a-jwt") === null);
 
   // ── setTokens / SSR seed ────────────────────────────────
-  const ssr = createClient({ baseUrl: BASE, worker: false, multiTab: false });
+  const ssr = createClient({ baseUrl: BASE, worker: false, multiTab: false, throwError: false });
   await ssr.setTokens({ accessToken: state.validAccess, refreshToken: "refresh-1" });
   const seeded = await ssr.get("/protected");
   check("SSR-seeded tokens work", seeded.status === true);

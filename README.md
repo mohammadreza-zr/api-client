@@ -12,7 +12,9 @@ npm install @mohammadreza-zr/api-client
 - **Runs anywhere** — React, Vue, Svelte, Angular, Next.js, Nuxt, SvelteKit, plain `<script>`, Node, SSR/SSG/SPA
 - **One request engine** — the worker and main thread run the *same* code, so behaviour can never drift
 - **Concurrency-safe refresh** — 50 simultaneous 401s trigger exactly **one** refresh call
-- **Never throws by default** — every call resolves with a predictable envelope
+- **Drop-in for TanStack Query / SWR** — failures reject with a typed `ApiError`, or switch to a never-throwing envelope with one flag
+- **Real upload support** — `FormData`, `File`, `Blob`, typed arrays and streams, with token refresh handled mid-upload
+- **CSRF double-submit** built in, for cookie auth
 - **~13 KB** min+gzip, tree-shakeable, ESM + CJS + full types
 
 ---
@@ -30,20 +32,51 @@ export const api = createClient({
 
 ```ts
 import { api } from "./lib/api";
+import { ApiError } from "@mohammadreza-zr/api-client";
 
-const { data, status, message } = await api.get<User[]>("/users");
-
-if (status) console.log(data);
-else console.error(message);
+try {
+  const { data } = await api.get<User[]>("/users");
+  console.log(data);
+} catch (e) {
+  if (e instanceof ApiError) console.error(e.statusCode, e.message);
+}
 ```
 
 That's it. Worker isolation, refresh and tab sync are on by default and degrade automatically where unsupported.
 
 ---
 
-## The response envelope
+## Errors: throwing by default
 
-Every method resolves with the same shape — no try/catch needed.
+**Failed requests reject with an `ApiError`.** This is the default because it is what every data-fetching library expects — TanStack Query, SWR and Vue Query all detect failure through a rejected promise, and it makes `await` behave the way you'd assume.
+
+```ts
+import { ApiError } from "@mohammadreza-zr/api-client";
+
+try {
+  const { data } = await api.get<User>("/users/1");
+} catch (e) {
+  if (e instanceof ApiError) {
+    e.statusCode; // 404
+    e.errors;     // { email: ["already taken"] }
+    e.response;   // the full envelope, if you want it
+  }
+}
+```
+
+### Prefer the never-throwing envelope?
+
+Turn it off globally, per request, or both — per-request always wins.
+
+```ts
+const api = createClient({ throwError: false });     // envelope everywhere
+const res = await api.get("/users");                 // never rejects
+if (!res.status) console.error(res.message);
+
+await api.get("/users", { throwError: true });       // …except this one
+```
+
+Successful responses always resolve with the same envelope:
 
 ```ts
 interface IRes<R> {
@@ -55,20 +88,6 @@ interface IRes<R> {
   errors?: Record<string, string[]>; // field-level validation errors
   error?: unknown;
   headers?: Record<string, string>;
-}
-```
-
-Prefer exceptions (e.g. for React Query)? Opt in per request:
-
-```ts
-import { ApiError } from "@mohammadreza-zr/api-client";
-
-try {
-  const { data } = await api.get<User>("/users/1", { throwError: true });
-} catch (e) {
-  if (e instanceof ApiError) {
-    console.log(e.statusCode, e.errors);
-  }
 }
 ```
 
@@ -204,7 +223,9 @@ await api.get<User>("/users/{id}", {
   refreshTokenCheck: false,             // disable 401 → refresh → retry
   fullData: true,                       // don't unwrap { data: ... }
   hideErrorMessage: true,               // skip the onError callback
-  throwError: true,                     // reject instead of resolving
+  throwError: false,                    // resolve with the envelope instead of rejecting
+  uploadSkewMs: 600_000,                // refresh the token before a long upload
+  duplex: "half",                       // for ReadableStream bodies (set automatically)
   log: true,                            // emit a structured log entry
   signal: controller.signal,            // your own AbortSignal — always honoured
   beforeFunc: (body) => body,           // transform outgoing body
@@ -242,6 +263,28 @@ Uploads survive the `401 → refresh → retry` flow: the body is re-sent intact
 
 > Large uploads: the default 30s timeout applies per attempt. Pass `timeout: 0` to disable it for a specific call.
 
+### Long uploads and token expiry
+
+A 5-minute upload can outlive its access token. The client already retries a 401 by refreshing and re-sending the body, but re-uploading a large file is wasteful — and a `ReadableStream` cannot be replayed at all.
+
+`uploadSkewMs` avoids the situation entirely by refreshing **before** the upload starts if the token would expire within the window you give it:
+
+```ts
+await api.post("/upload", form, {
+  uploadSkewMs: 10 * 60_000, // "this may run for 10 minutes — refresh now if needed"
+  timeout: 0,                // don't abort a slow upload
+});
+```
+
+It only refreshes when the token actually falls inside the window, so short uploads pay nothing.
+
+| Body type | Token expires mid-upload |
+|---|---|
+| `FormData`, `File`, `Blob`, `ArrayBuffer`, string | Refreshed and re-sent automatically |
+| `ReadableStream` | Cannot be replayed — fails with a clear message telling you to retry (the token *has* been refreshed by then) |
+
+Streams are single-use by nature, so prefer `uploadSkewMs` when streaming. Note that a `ReadableStream` also can't be transferred into a Web Worker — use `worker: false` for streamed uploads, or send a `Blob`/`File` instead.
+
 ---
 
 ## Client options
@@ -250,8 +293,11 @@ Uploads survive the `401 → refresh → retry` flow: the body is re-sent intact
 |---|---|---|
 | `baseUrl` | auto-detected | Falls back to `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BASE_URL`, `VITE_API_URL`, `VITE_BASE_URL`, `NUXT_PUBLIC_API_URL`, `API_URL` |
 | `timeout` | `30000` | Per-request timeout in ms |
-| `throwError` | `false` | Reject with `ApiError` on failure instead of resolving. **Set `true` for TanStack Query / SWR.** Overridable per request |
+| `throwError` | `true` | Reject with `ApiError` on failure. Set `false` for the never-throwing envelope. Overridable per request |
 | `headers` | `{}` | Merged into every request |
+| `xsrfCookieName` | – | Cookie holding the CSRF token, mirrored into a header on unsafe methods |
+| `xsrfHeaderName` | `"X-CSRF-Token"` | Header the CSRF token is sent under |
+| `getCsrfToken` | – | Supplies the CSRF token directly. Required in worker mode |
 | `authMode` | `"header"` | `"header"` or `"cookie"` |
 | `credentials` | per mode | `"same-origin"`, or `"include"` in cookie mode |
 | `worker` | `true` | Run requests in a Web Worker |
@@ -266,6 +312,36 @@ Uploads survive the `401 → refresh → retry` flow: the body is re-sent intact
 | `onAuthFailure` | – | Auth permanently lost |
 | `onError` | – | Called for each failed request |
 | `onLog` | `console.info` | Receives entries when `log: true` |
+
+### CSRF protection
+
+Cookie auth (`authMode: "cookie"`) means the browser attaches your session cookie to cross-site requests too, which is what makes CSRF possible. The standard defence is **double-submit**: the server sets a CSRF token in a readable cookie, and the client echoes it back in a header. An attacker's page can trigger a request but cannot read your cookie, so it cannot forge the header.
+
+**Your backend still does the enforcement** — it has to compare the cookie against the header and reject mismatches. This client automates the browser half:
+
+```ts
+const api = createClient({
+  authMode: "cookie",
+  xsrfCookieName: "csrftoken",     // cookie your server sets
+  xsrfHeaderName: "X-CSRF-Token",  // header to mirror it into (this is the default)
+});
+
+await api.post("/orders", body); // X-CSRF-Token attached automatically
+```
+
+Details worth knowing:
+
+- Only `POST`, `PUT`, `PATCH` and `DELETE` get the header — `GET` is a safe method and is left alone.
+- An explicit per-request header always wins, so you can override it anywhere.
+- If the token is not in a readable cookie — a `<meta>` tag, an in-memory value, or **worker mode**, where `document.cookie` does not exist — supply it directly:
+
+```ts
+createClient({
+  getCsrfToken: () => document.querySelector("meta[name=csrf]")?.content,
+});
+```
+
+`getCsrfToken` is resolved on the main thread and forwarded with each request, so it works in worker mode where a cookie read would not.
 
 ### Storage and security
 
@@ -288,21 +364,9 @@ createClient({
 
 ## Framework recipes
 
-### TanStack Query / SWR — set `throwError: true`
+### TanStack Query
 
-These libraries decide success or failure by whether the promise **rejects**. By default this client never rejects: it resolves with `{ status: false, statusCode: 500 }`. That means **a failed request would be cached as successful data**, `isError` would stay `false`, and retries would never fire.
-
-Enable rejection once, on the client:
-
-```ts
-// lib/api.ts
-export const api = createClient({
-  baseUrl: process.env.NEXT_PUBLIC_API_URL,
-  throwError: true, // failures reject with ApiError — required for react-query/SWR
-});
-```
-
-Individual calls can still opt out with `throwError: false` when you want the envelope.
+Works out of the box — failures reject, which is exactly what the library expects. No per-call flags needed.
 
 ```tsx
 import { useQuery } from "@tanstack/react-query";
@@ -370,11 +434,19 @@ export async function getUsers() {
 export const api = createClient({ baseUrl: import.meta.env.VITE_API_URL });
 
 const users = ref<User[]>([]);
+const error = ref<string>();
+
 onMounted(async () => {
-  const res = await api.get<User[]>("/users");
-  if (res.status) users.value = res.data ?? [];
+  try {
+    const { data } = await api.get<User[]>("/users");
+    users.value = data ?? [];
+  } catch (e) {
+    error.value = (e as ApiError).message;
+  }
 });
 ```
+
+Prefer no try/catch in components? Create the client with `throwError: false` and branch on `res.status` instead.
 
 ### Plain browser
 
@@ -410,6 +482,31 @@ api.destroy()                    // terminate worker + close channel
 Also exported: `ApiError`, `buildQueryString`, `getTokenExpiry`, `isTokenExpired`, `MemoryStorage`, `WebStorage`, `CookieStorage`, and all types.
 
 ---
+
+## Migrating to throwing errors
+
+`throwError` now defaults to `true`, so failed requests reject instead of resolving. If you have existing code written against the envelope, restore the old behaviour in one line:
+
+```ts
+export const api = createClient({ baseUrl: "…", throwError: false });
+```
+
+Everything else is unchanged. To adopt the new default instead, replace `status` checks with `try/catch`:
+
+```ts
+// before
+const res = await api.get("/users");
+if (!res.status) return handle(res.message);
+use(res.data);
+
+// after
+try {
+  const { data } = await api.get("/users");
+  use(data);
+} catch (e) {
+  handle((e as ApiError).message);
+}
+```
 
 ## Requirements
 
