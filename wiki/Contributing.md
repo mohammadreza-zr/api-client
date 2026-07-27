@@ -223,3 +223,39 @@ Include the package version, runtime and framework, your `createClient` options 
 ## Security issues
 
 Open a [security advisory](https://github.com/mohammadreza-zr/api-client/security/advisories/new) rather than a public issue.
+
+---
+
+## Testing against a real project locally
+
+`dist/` is generated and git-ignored, so a fresh clone has no build. Packing or
+linking without building first ships **nothing** — or, worse, a stale build from
+an earlier commit, which looks exactly like the bug you just fixed still being
+broken.
+
+`prepack` now runs the build automatically, so all of these are safe:
+
+```bash
+npm pack                      # tarball always contains a fresh dist/
+npm install /path/to/api-client            # folder install
+npm install /path/to/mrzr-api-client-1.0.1.tgz
+```
+
+`npm link` and `npm install <folder>` on some npm versions **do not** run
+`prepack`. When linking, build explicitly and keep it building:
+
+```bash
+npm run build     # once
+npm run dev       # or: rebuild on change
+npm link
+```
+
+After installing into your app, confirm you got the build you expect:
+
+```bash
+grep -c storageResult node_modules/@mrzr/api-client/dist/index.js
+```
+
+`verify/package.mjs` guards all of this: it packs a real tarball, installs it
+into a throwaway project, and asserts the installed code both contains the
+fixes and behaves — so a packaging regression fails CI instead of reaching you.

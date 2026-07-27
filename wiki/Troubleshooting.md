@@ -133,6 +133,28 @@ Pending promises reject with this when `destroy()` is called. Make sure you aren
 
 ## Behaviour problems
 
+### I fixed a bug / upgraded, but the old behaviour is still there
+
+Almost always a **stale or missing build** rather than the bug itself.
+
+`dist/` is git-ignored and generated. Packing or linking without building ships
+whatever was there last — or nothing at all. Check what you actually installed:
+
+```bash
+grep -c storageResult node_modules/@mrzr/api-client/dist/index.js
+# 0 → stale build predating the storage fix
+```
+
+`prepack` builds automatically for `npm pack` and tarball installs. For
+`npm link`, build first (`npm run build`) — linking does not always trigger it.
+Then clear stale copies:
+
+```bash
+rm -rf node_modules/.vite .next/cache   # bundler caches hold the old module
+```
+
+---
+
 ### User is logged out after every page reload
 
 First, check whether the tokens are being written at all — look for `apiclient.tokens` in DevTools → Application → Local Storage (or Cookies).
