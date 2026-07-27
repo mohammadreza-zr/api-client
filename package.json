@@ -35,6 +35,7 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src scripts",
+    "verify": "npm run build && node verify/run.mjs && node verify/worker.mjs && node verify/audit.mjs && node verify/features.mjs",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -69,6 +70,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
+    "@tanstack/query-core": "^5.101.4",
     "@types/node": "^20.19.43",
     "eslint": "^9.39.0",
     "tsup": "^8.5.0",

@@ -64,7 +64,14 @@ export function start(port = 4599) {
 
     if (path === "/echo") {
       const body = await readBody(req);
-      return send(res, 200, { data: { query: url.search, body, ct: req.headers["content-type"] ?? null } });
+      return send(res, 200, {
+        data: {
+          query: url.search,
+          body,
+          ct: req.headers["content-type"] ?? null,
+          csrf: req.headers["x-csrf-token"] ?? null,
+        },
+      });
     }
 
     if (path === "/slow") {

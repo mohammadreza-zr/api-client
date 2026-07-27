@@ -20,6 +20,7 @@ export type SerializableOptions = Omit<
   | "onError"
   | "onLog"
   | "worker"
+  | "getCsrfToken"
 > & { storage?: Exclude<ClientOptions["storage"], object> };
 
 /** Request config minus the function hooks. */

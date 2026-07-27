@@ -117,8 +117,29 @@ export interface RequestConfig<T = unknown>
   /** Suppress the `onError` callback for this request. */
   hideErrorMessage?: boolean;
 
-  /** Reject the promise on failure instead of resolving with `status: false`. */
+  /**
+   * Reject the promise on failure instead of resolving with `status: false`.
+   * Overrides the client-wide setting for this one call.
+   */
   throwError?: boolean;
+
+  /**
+   * Refresh the access token before sending when it expires within this many
+   * ms. Use it for long uploads: a token with 40s left passes the normal
+   * check, but a 5-minute upload will expire mid-flight.
+   *
+   * ```ts
+   * // Refresh now if the token dies within 10 minutes.
+   * await api.post("/upload", form, { uploadSkewMs: 600_000 });
+   * ```
+   */
+  uploadSkewMs?: number;
+
+  /**
+   * `duplex` mode for streamed request bodies. Defaults to `"half"`, which is
+   * required by spec whenever the body is a `ReadableStream`.
+   */
+  duplex?: "half";
 
   /** Emit a structured log line for this request. */
   log?: boolean;
@@ -188,6 +209,50 @@ export interface ClientOptions {
 
   /** Default request timeout in ms. Default `30000`. */
   timeout?: number;
+
+  /**
+   * Reject with an `ApiError` on failure instead of resolving with
+   * `status: false`. **Default `true`.**
+   *
+   * Throwing is the default because it is what every data-fetching library
+   * expects: TanStack Query, SWR and Vue Query all detect failure through a
+   * rejected promise. With `false` a 500 would be delivered as a *successful*
+   * result and cached as data.
+   *
+   * Set `false` for the never-throwing envelope style, either globally or per
+   * request:
+   *
+   * ```ts
+   * const api = createClient({ throwError: false });   // envelope everywhere
+   * await api.get("/x", { throwError: false });        // envelope for one call
+   * ```
+   */
+  throwError?: boolean;
+
+  /**
+   * Name of the cookie holding the CSRF token. When set, the client reads it
+   * and mirrors it into `xsrfHeaderName` on POST/PUT/PATCH/DELETE — the
+   * standard double-submit pattern.
+   *
+   * Your backend still has to compare the cookie against the header and reject
+   * mismatches; this only automates the client half.
+   *
+   * ```ts
+   * createClient({ authMode: "cookie", xsrfCookieName: "csrftoken" });
+   * ```
+   */
+  xsrfCookieName?: string;
+
+  /** Header the CSRF token is sent under. Default `"X-CSRF-Token"`. */
+  xsrfHeaderName?: string;
+
+  /**
+   * Supplies the CSRF token directly, for when it does not live in a readable
+   * cookie (a `<meta>` tag, an API call, or inside a Web Worker where
+   * `document.cookie` does not exist). Takes precedence over
+   * `xsrfCookieName`.
+   */
+  getCsrfToken?: () => string | undefined;
 
   /** Headers merged into every request. */
   headers?: Record<string, string>;

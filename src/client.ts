@@ -107,13 +107,18 @@ export function createClient(options: ClientOptions = {}): ApiClient {
 }
 
 /** Applies `throwError` uniformly on top of either implementation. */
-function wrap(impl: Implementation, isWorker: boolean, _options: ClientOptions): ApiClient {
+function wrap(impl: Implementation, isWorker: boolean, options: ClientOptions): ApiClient {
+  // Throwing by default is what react-query, SWR and Vue Query expect.
+  const throwByDefault = options.throwError !== false;
+
   const guard = async <R>(
     run: () => Promise<IRes<R>>,
     config?: RequestConfig<R>,
   ): Promise<IRes<R>> => {
     const result = await run();
-    if (!result.status && config?.throwError) throw new ApiError(result);
+    // Per-request config wins, so a client-wide default can be opted out of.
+    const shouldThrow = config?.throwError ?? throwByDefault;
+    if (!result.status && shouldThrow) throw new ApiError(result);
     return result;
   };
 
