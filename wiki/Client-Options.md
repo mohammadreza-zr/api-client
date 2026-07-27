@@ -58,9 +58,37 @@ When omitted, the first environment variable that is set wins, in this order:
 6. `PUBLIC_API_URL`
 7. `API_URL`
 
-Read from `process.env` where it exists, and from `globalThis.__VITE_ENV__` where a bundler has injected it. If none is set, `baseUrl` is `""` and relative URLs resolve against the current origin.
+Each name is read from, in order:
 
-> The lookup is written so CJS builds never touch `import.meta` (a syntax error there) and bundlers that statically replace `import.meta.env` still work.
+1. `globalThis.__API_BASE_URL__` — an explicit runtime override that beats everything below
+2. **Static** `process.env.NEXT_PUBLIC_API_URL` / `import.meta.env.VITE_API_URL` reads, written as literal member chains so Next, Vite, Nuxt and SvelteKit can inline them at build time
+3. `globalThis.process.env` at runtime (Node, Bun, SSR)
+4. `import.meta.env` at runtime (Vite dev and SSR)
+5. `globalThis.__VITE_ENV__`, `globalThis.__ENV__`, `globalThis.ENV` — for hand-injected runtime config
+
+If none is set, `baseUrl` is `""` and relative URLs resolve against the current origin.
+
+> Detection must use *literal* `process.env.FOO` reads, because bundlers inline env vars by replacing that exact text. A dynamic `process.env[key]` lookup is invisible to that pass, and browser bundles have no `process` at all — which is why auto-detection silently produced `""` in the browser before v1.0.2.
+
+> The lookup is written so CJS builds never touch `import.meta` (a syntax error there): the CJS output compiles it to an empty object, and every read is individually guarded.
+
+### Worker mode
+
+Requests run in a Blob worker, whose source no bundler ever processed and which has neither `process` nor `import.meta.env`. The base URL is therefore resolved **on the main thread** and forwarded to the worker at init. Auto-detection works identically in both modes.
+
+### When auto-detection can't see your variable
+
+Only build-time-inlined or runtime-present variables are visible. If you use a custom variable name, or load config at runtime, set it explicitly:
+
+```ts
+createClient({ baseUrl: window.__RUNTIME_CONFIG__.apiUrl });
+```
+
+or set the override before creating the client:
+
+```ts
+globalThis.__API_BASE_URL__ = "https://api.example.com";
+```
 
 Being explicit is always clearer:
 

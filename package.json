@@ -35,7 +35,7 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src scripts",
-    "verify": "npm run build && node verify/run.mjs && node verify/worker.mjs && node verify/audit.mjs && node verify/features.mjs",
+    "verify": "npm run build && node verify/run.mjs && node verify/worker.mjs && node verify/audit.mjs && node verify/features.mjs && node verify/baseurl.mjs",
     "docs:sync": "bash scripts/sync-wiki.sh",
     "prepublishOnly": "npm run build"
   },

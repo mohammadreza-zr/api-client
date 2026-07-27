@@ -279,6 +279,42 @@ try {
   csrfApi.destroy();
 
   strict.destroy();
+
+  /*
+   * baseUrl auto-detection must survive the worker boundary.
+   *
+   * The worker runs from a Blob, so no bundler ever touched its source and it
+   * has no `process` / `import.meta.env` of its own — note the vm scope above
+   * deliberately omits `process`, exactly like a real browser worker. The host
+   * therefore has to resolve `baseUrl` on the main thread and forward it. It
+   * used to forward `undefined`, so every relative URL in worker mode was
+   * silently sent to the page origin.
+   */
+  console.log("\nbaseUrl auto-detection in worker mode");
+
+  check("worker scope genuinely has no process", (() => {
+    const probe = new FakeWorker();
+    const seen = typeof probe._scope.process;
+    probe.terminate();
+    return seen === "undefined";
+  })());
+
+  for (const key of ["NEXT_PUBLIC_API_URL", "VITE_API_URL", "API_URL"]) {
+    process.env[key] = BASE;
+    const detected = createClient({ multiTab: false, refreshSkewMs: 0, throwError: false });
+    check(`worker mode engaged for ${key}`, detected.isWorker === true);
+    const res = await detected.get("/echo");
+    check(`worker inherits baseUrl from ${key} (was sent to page origin)`, res.status === true, res.message);
+    detected.destroy();
+    delete process.env[key];
+  }
+
+  process.env.NEXT_PUBLIC_API_URL = "http://127.0.0.1:9/wrong";
+  const explicit = createClient({ baseUrl: BASE, multiTab: false, refreshSkewMs: 0, throwError: false });
+  const explicitRes = await explicit.get("/echo");
+  check("worker: explicit baseUrl still beats env", explicitRes.status === true);
+  explicit.destroy();
+  delete process.env.NEXT_PUBLIC_API_URL;
 } catch (e) {
   fail++;
   console.error("\nUNEXPECTED:", e);

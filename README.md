@@ -306,7 +306,7 @@ Streams are single-use by nature, so prefer `uploadSkewMs` when streaming. Note 
 
 | Option | Default | Description |
 |---|---|---|
-| `baseUrl` | auto-detected | Falls back to `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BASE_URL`, `VITE_API_URL`, `VITE_BASE_URL`, `NUXT_PUBLIC_API_URL`, `API_URL` |
+| `baseUrl` | auto-detected | Falls back to `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BASE_URL`, `VITE_API_URL`, `VITE_BASE_URL`, `NUXT_PUBLIC_API_URL`, `PUBLIC_API_URL`, `API_URL`, or `globalThis.__API_BASE_URL__`. Works in the browser, on the server, and in worker mode |
 | `timeout` | `30000` | Per-request timeout in ms |
 | `throwError` | `true` | Reject with `ApiError` on failure. Set `false` for the never-throwing envelope. Overridable per request |
 | `headers` | `{}` | Merged into every request |

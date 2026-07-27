@@ -90,6 +90,35 @@ console.log(res.statusCode, res.message, res.error);
 
 ---
 
+### Requests go to my own app instead of the API
+
+Symptom: a `GET /users` shows up in the Network tab as `https://my-app.com/users` and returns your `index.html` (or a 404 from your own router) rather than hitting the API.
+
+That means `baseUrl` resolved to `""`. Check what it actually resolved to:
+
+```ts
+import { detectBaseUrl } from "@mrzr/api-client";
+
+console.log(JSON.stringify(detectBaseUrl())); // "" means nothing was found
+```
+
+Common causes:
+
+- **The variable isn't exposed to the client.** Browser bundlers only inline names with the right prefix. `API_URL` works on the server but is stripped from the browser bundle — use `NEXT_PUBLIC_API_URL`, `VITE_API_URL`, `NUXT_PUBLIC_API_URL` or `PUBLIC_API_URL`.
+- **You used a custom variable name.** Auto-detection only knows the names listed in [[Client Options]]. Pass it yourself: `createClient({ baseUrl: import.meta.env.MY_API })`.
+- **Config is loaded at runtime**, after the bundle was built. Set `globalThis.__API_BASE_URL__` before creating the client, or pass `baseUrl` explicitly.
+- **The dev server wasn't restarted** after editing `.env`. Most bundlers only read it at startup.
+
+Being explicit always beats detection:
+
+```ts
+export const api = createClient({ baseUrl: import.meta.env.VITE_API_URL });
+```
+
+> Fixed in v1.0.2. Earlier versions only read env vars through a *dynamic* `process.env[key]` index, which bundlers cannot inline and browsers don't have — so auto-detection always returned `""` on the client, and in worker mode regardless of environment.
+
+---
+
 ### `Worker not initialized`
 
 A request was made before the worker signalled `ready`, or after `destroy()`. The client awaits readiness internally, so this almost always means the client was destroyed and then reused. Create a new one.

@@ -7,6 +7,7 @@ import type {
   TokenPair,
 } from "../types";
 import type { HostMessage, SerializableConfig, SerializableOptions, WorkerMessage } from "./protocol";
+import { detectBaseUrl } from "../internal/env";
 import { WORKER_SOURCE } from "./worker-source";
 
 /**
@@ -330,6 +331,15 @@ function toSerializableOptions(options: ClientOptions): SerializableOptions {
 
   return {
     ...rest,
+    /*
+     * Resolve the base URL here, on the main thread.
+     *
+     * The worker runs from a Blob, so the bundler never touched its source and
+     * `process.env` / `import.meta.env` are both absent inside it. Detecting
+     * there would always yield `""` and every relative URL would hit the page
+     * origin instead of the API.
+     */
+    baseUrl: options.baseUrl ?? detectBaseUrl() ?? "",
     // A custom storage object cannot cross the boundary; fall back to memory.
     storage: typeof storage === "object" ? undefined : storage,
   };
