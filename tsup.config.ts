@@ -6,6 +6,8 @@ export default defineConfig({
   dts: true,
   clean: true,
   sourcemap: true,
-  external: ["node:fs", "node:path"],
+  treeshake: true,
   target: "es2020",
+  platform: "neutral",
+  splitting: false,
 });

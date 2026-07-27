@@ -1,32 +1,34 @@
-export { createClient } from "./create-client";
-export type { CreateClientOptions, FetchGuardClient } from "./create-client";
+/**
+ * @mohammadreza-zr/api-client
+ *
+ * A dependency-free, typed REST client with automatic token refresh,
+ * Web Worker isolation and cross-tab auth sync. Works in every JS runtime.
+ */
 
-// For advanced users who want direct access:
-export { APIClient } from "./client";
-export { WorkerClient } from "./worker/worker-client";
-export { MultiTabCoordinator } from "./worker/multi-tab";
+export { createClient } from "./client";
+export type { ApiClient } from "./client";
 
-// Types
+export { ApiError } from "./types";
 export type {
-  IRes,
-  APIConfig,
-  Params,
+  AuthMode,
+  AuthState,
+  ClientOptions,
   HttpMethod,
+  IRes,
   ListResponse,
+  LogEntry,
   Ordering,
+  Params,
+  RequestConfig,
+  StorageKind,
+  TokenExtractor,
   TokenPair,
-  RefreshTokenHandler,
-  LogoutHandler,
+  TokenStorage,
 } from "./types";
 
-export type { APIClientOptions, AuthMode } from "./config/defaults";
-export type { ITokenStorage } from "./storage/token-storage.interface";
-export { MemoryTokenStorage } from "./storage/memory-storage";
-export { CookieTokenStorage } from "./storage/cookie-storage";
-export { IndexedDBTokenStorage } from "./storage/indexeddb-storage";
+// Storage adapters, for custom persistence setups.
+export { CookieStorage, MemoryStorage, WebStorage } from "./internal/storage";
 
-// Utils
-export { buildQueryString } from "./utils/query-string";
-export { applyUrlTemplate } from "./utils/url-template";
-export { TokenManager } from "./core/token-manager";
-export { RequestQueue } from "./core/request-queue";
+// Small utilities that are genuinely useful outside the client.
+export { buildQueryString } from "./internal/url";
+export { getTokenExpiry, isTokenExpired } from "./internal/jwt";

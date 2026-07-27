@@ -1,123 +1,135 @@
-import type { APIConfig, HttpMethod, IRes } from "./types";
-import type { APIClientOptions, AuthMode } from "./config/defaults";
-import { DEFAULT_OPTIONS, DEFAULT_CONFIG } from "./config/defaults";
-import { TokenManager } from "./core/token-manager";
-import { executeFetch, type ExecutorDeps } from "./core/request-executor";
-import { handleAuth } from "./interceptors/auth.interceptor";
-import { handleError } from "./interceptors/error.interceptor";
-import { MemoryTokenStorage } from "./storage/memory-storage";
-import type { ITokenStorage } from "./storage/token-storage.interface";
-import type { RefreshTokenHandler, LogoutHandler } from "./types";
+import type {
+  AuthState,
+  ClientOptions,
+  IRes,
+  RequestConfig,
+  TokenPair,
+} from "./types";
+import { ApiError } from "./types";
+import { CoreClient } from "./internal/core-client";
+import { hasWorker, isServer } from "./internal/env";
+import { WorkerHost } from "./worker/worker-host";
+import { WORKER_SOURCE } from "./worker/worker-source";
 
-export class APIClient {
-  private baseURL: string;
-  private defaultHeaders: Record<string, string>;
-  private timeout: number;
-  private tokenManager: TokenManager;
-  private toast?: { error: (msg: string) => void };
-  private authMode: AuthMode;
-  private credentials: RequestCredentials;
+/**
+ * The client returned by `createClient`.
+ * Identical in every environment: worker, main thread, and server.
+ */
+export interface ApiClient {
+  get<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>>;
+  post<R = unknown>(url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
+  put<R = unknown>(url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
+  patch<R = unknown>(url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
+  delete<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>>;
 
-  constructor(
-    options: APIClientOptions = {},
-    storage?: ITokenStorage,
-    refreshHandler?: RefreshTokenHandler,
-    onAuthFailure?: LogoutHandler,
-  ) {
-    this.baseURL = options.baseUrl ?? getEnvBaseUrl();
+  /** Authenticate and store the returned tokens. */
+  login<R = unknown>(body: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
 
-    this.defaultHeaders = {
-      "Content-Type": "application/json",
-      ...options.headers,
-    };
+  /** Call the logout endpoint and clear tokens in every tab. */
+  logout<R = unknown>(config?: RequestConfig<R>): Promise<IRes<R>>;
 
-    this.timeout = options.timeout ?? DEFAULT_OPTIONS.timeout;
-    this.toast = options.toast;
-    this.authMode = options.authMode ?? "header";
+  /** Seed tokens from SSR, an OAuth callback, or your own login flow. */
+  setTokens(tokens: TokenPair): Promise<void>;
 
-    // cookie mode → "include" by default so httpOnly cookies are sent cross-origin
-    this.credentials =
-      options.credentials ??
-      (this.authMode === "cookie" ? "include" : "same-origin");
+  /** Force a token refresh. Returns `null` when it failed. */
+  refresh(): Promise<string | null>;
 
-    this.tokenManager = new TokenManager({
-      storage: storage ?? new MemoryTokenStorage(),
-      refreshHandler,
-      onAuthFailure: onAuthFailure ?? options.onAuthFailure,
-    });
-  }
+  /** Current auth state. Never contains tokens. */
+  getAuthState(): Promise<AuthState>;
 
-  get tokens(): TokenManager {
-    return this.tokenManager;
-  }
+  /** Subscribe to auth changes. Returns an unsubscribe function. */
+  onAuthStateChange(listener: (state: AuthState) => void): () => void;
 
-  async setAccessToken(token: string): Promise<void> {
-    await this.tokenManager.setAccessToken(token);
-  }
+  /** Whether requests are running inside a Web Worker. */
+  readonly isWorker: boolean;
 
-  async setRefreshToken(token: string): Promise<void> {
-    await this.tokenManager.setRefreshToken(token);
-  }
-
-  // ── HTTP verbs ───────────────────────────────────────────
-
-  get<R = any>(url: string, config?: APIConfig<R>): Promise<IRes<R>> {
-    return this.request<R>({ method: "GET", url, config });
-  }
-
-  post<R = any, B = any>(url: string, body: B, config?: APIConfig<R>): Promise<IRes<R>> {
-    return this.request<R>({ method: "POST", url, body, config });
-  }
-
-  put<R = any, B = any>(url: string, body: B, config?: APIConfig<R>): Promise<IRes<R>> {
-    return this.request<R>({ method: "PUT", url, body, config });
-  }
-
-  patch<R = any, B = any>(url: string, body: B, config?: APIConfig<R>): Promise<IRes<R>> {
-    return this.request<R>({ method: "PATCH", url, body, config });
-  }
-
-  delete<R = any>(url: string, config?: APIConfig<R>): Promise<IRes<R>> {
-    return this.request<R>({ method: "DELETE", url, config });
-  }
-
-  // ── core pipeline ────────────────────────────────────────
-
-  private async request<R = any>(props: {
-    method: HttpMethod;
-    url: string;
-    body?: any;
-    config?: APIConfig<R>;
-  }): Promise<IRes<R>> {
-    const config: APIConfig<any> = { ...DEFAULT_CONFIG, ...props.config };
-
-    const deps: ExecutorDeps = {
-      baseURL: this.baseURL,
-      defaultHeaders: this.defaultHeaders,
-      timeout: this.timeout,
-      getAccessToken: () => this.tokenManager.getAccessToken(),
-      authMode: this.authMode,
-      credentials: this.credentials,
-    };
-
-    const requestProps = {
-      method: props.method,
-      url: props.url,
-      body: props.body,
-      config,
-    };
-
-    let { result } = await executeFetch<R>(requestProps, deps);
-
-    if (result.statusCode === 401 && config.refreshTokenCheck !== false) {
-      result = await handleAuth<R>(result, requestProps, config, this.tokenManager, deps);
-    }
-
-    result = handleError<R>(result, config, { toast: this.toast });
-
-    return result;
-  }
+  /** Tear down the worker and cross-tab channel. */
+  destroy(): void;
 }
 
-// keep the import
-import { getEnvBaseUrl } from "./utils/helpers";
+/**
+ * The surface both implementations share. Declaring it explicitly is what
+ * guarantees worker mode and main-thread mode cannot drift apart.
+ */
+type Implementation = Pick<
+  ApiClient,
+  | "get"
+  | "post"
+  | "put"
+  | "patch"
+  | "delete"
+  | "login"
+  | "logout"
+  | "setTokens"
+  | "refresh"
+  | "getAuthState"
+  | "onAuthStateChange"
+  | "destroy"
+>;
+
+/**
+ * Creates an API client.
+ *
+ * Works unchanged in React, Vue, Svelte, Angular, Next.js, Nuxt, plain scripts
+ * and on the server. Requests run inside a Web Worker when the environment
+ * supports one, so tokens never touch the main thread; otherwise the very same
+ * implementation runs inline.
+ *
+ * ```ts
+ * import { createClient } from "@mohammadreza-zr/api-client";
+ *
+ * export const api = createClient({ baseUrl: "https://api.example.com" });
+ *
+ * const { data, status } = await api.get<User[]>("/users");
+ * ```
+ */
+export function createClient(options: ClientOptions = {}): ApiClient {
+  const wantsWorker = options.worker !== false;
+  const canUseWorker =
+    wantsWorker &&
+    !isServer() &&
+    hasWorker() &&
+    WORKER_SOURCE.length > 0 &&
+    // A custom storage object can't be cloned into a worker.
+    typeof options.storage !== "object" &&
+    !options.extractTokens &&
+    !options.buildRefreshBody;
+
+  if (canUseWorker) {
+    try {
+      return wrap(new WorkerHost(options), true, options);
+    } catch {
+      // Blob workers are blocked by some CSPs — fall back silently.
+    }
+  }
+
+  return wrap(new CoreClient(options), false, options);
+}
+
+/** Applies `throwError` uniformly on top of either implementation. */
+function wrap(impl: Implementation, isWorker: boolean, _options: ClientOptions): ApiClient {
+  const guard = async <R>(
+    run: () => Promise<IRes<R>>,
+    config?: RequestConfig<R>,
+  ): Promise<IRes<R>> => {
+    const result = await run();
+    if (!result.status && config?.throwError) throw new ApiError(result);
+    return result;
+  };
+
+  return {
+    get: (url, config) => guard(() => impl.get(url, config), config),
+    post: (url, body, config) => guard(() => impl.post(url, body, config), config),
+    put: (url, body, config) => guard(() => impl.put(url, body, config), config),
+    patch: (url, body, config) => guard(() => impl.patch(url, body, config), config),
+    delete: (url, config) => guard(() => impl.delete(url, config), config),
+    login: (body, config) => guard(() => impl.login(body, config), config),
+    logout: (config) => impl.logout(config),
+    setTokens: (tokens) => impl.setTokens(tokens),
+    refresh: () => impl.refresh(),
+    getAuthState: () => impl.getAuthState(),
+    onAuthStateChange: (listener) => impl.onAuthStateChange(listener),
+    isWorker,
+    destroy: () => impl.destroy(),
+  } as ApiClient;
+}

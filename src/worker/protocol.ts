@@ -1,128 +1,51 @@
-// ── Main Thread → Worker ─────────────────────────────────
+import type { AuthState, ClientOptions, HttpMethod, IRes, RequestConfig, TokenPair } from "../types";
 
-export type WorkerRequest =
-  | SetupMessage
-  | FetchMessage
-  | AuthCallMessage
-  | CancelMessage
-  | PingMessage;
+/**
+ * Worker wire protocol.
+ *
+ * Config is structured-cloned, so function options (`beforeFunc`, `afterFunc`,
+ * `beforeSelectOptions`) cannot cross the boundary. The host strips them and
+ * re-applies them to the result on the main thread, which keeps worker mode
+ * behaviourally identical to main-thread mode.
+ */
 
-export interface SetupMessage {
-  type: "SETUP";
-  payload: {
-    baseUrl: string;
-    timeout: number;
-    authMode: "header" | "cookie";
-    credentials: RequestCredentials;
-    defaultHeaders: Record<string, string>;
-    refreshUrl: string;
-    // For body-provider mode: initial tokens (sent once, then forgotten)
-    initialAccessToken?: string;
-    initialRefreshToken?: string;
-  };
-}
+/** Client options minus everything that is a function or otherwise unclonable. */
+export type SerializableOptions = Omit<
+  ClientOptions,
+  | "storage"
+  | "extractTokens"
+  | "buildRefreshBody"
+  | "onAuthStateChanged"
+  | "onAuthFailure"
+  | "onError"
+  | "onLog"
+  | "worker"
+> & { storage?: Exclude<ClientOptions["storage"], object> };
 
-export interface FetchMessage {
-  type: "FETCH";
-  id: string; // unique request ID for correlation
-  payload: {
-    method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
-    url: string;
-    body?: unknown;
-    headers?: Record<string, string>;
-    params?: Record<string, unknown>;
-    addTemplateToUrl?: Record<string, string | number>;
-    addToUrl?: (string | number)[];
-    stringifyBody?: boolean;
-    isFormData?: boolean;
-    fullData?: boolean;
-    refreshTokenCheck?: boolean;
-    throwError?: boolean;
-    log?: boolean;
-  };
-}
+/** Request config minus the function hooks. */
+export type SerializableConfig = Omit<
+  RequestConfig<unknown>,
+  "beforeFunc" | "afterFunc" | "beforeSelectOptions" | "signal"
+>;
 
-export interface AuthCallMessage {
-  type: "AUTH_CALL";
-  payload:
-    | { action: "login"; body: Record<string, unknown>; url?: string }
-    | { action: "logout"; url?: string }
-    | { action: "setTokens"; accessToken: string; refreshToken: string; expiresAt?: number };
-}
+export type HostMessage =
+  | { kind: "init"; options: SerializableOptions }
+  | { kind: "request"; id: number; method: HttpMethod; url: string; body?: unknown; config?: SerializableConfig }
+  | { kind: "abort"; id: number }
+  | { kind: "login"; id: number; body: unknown; config?: SerializableConfig }
+  | { kind: "logout"; id: number; config?: SerializableConfig }
+  | { kind: "setTokens"; id: number; tokens: TokenPair }
+  | { kind: "authState"; id: number }
+  | { kind: "refresh"; id: number }
+  | { kind: "destroy" };
 
-export interface CancelMessage {
-  type: "CANCEL";
-  id: string;
-}
-
-export interface PingMessage {
-  type: "PING";
-}
-
-// ── Worker → Main Thread ─────────────────────────────────
-
-export type WorkerResponse =
-  | FetchResultMessage
-  | AuthStateChangedMessage
-  | AuthResultMessage
-  | ErrorMessage
-  | PongMessage
-  | ReadyMessage;
-
-export interface FetchResultMessage {
-  type: "FETCH_RESULT";
-  id: string;
-  payload: {
-    statusCode: number;
-    status: boolean;
-    message: string;
-    data?: unknown;
-    errors?: Record<string, string[]>;
-  };
-}
-
-export interface AuthStateChangedMessage {
-  type: "AUTH_STATE_CHANGED";
-  payload: {
-    isAuthenticated: boolean;
-    expiresAt: number | null;
-    user?: unknown;
-    // NEVER includes tokens
-  };
-}
-
-export interface AuthResultMessage {
-  type: "AUTH_RESULT";
-  payload: {
-    success: boolean;
-    message: string;
-    user?: unknown;
-    expiresAt?: number;
-    // NEVER includes tokens
-  };
-}
-
-export interface ErrorMessage {
-  type: "ERROR";
-  id?: string;
-  payload: {
-    message: string;
-    code?: string;
-  };
-}
-
-export interface PongMessage {
-  type: "PONG";
-}
-
-export interface ReadyMessage {
-  type: "READY";
-}
-
-// ── Multi-Tab Broadcast ──────────────────────────────────
-
-export type TabBroadcast =
-  | { type: "REFRESH_STARTED"; tabId: string }
-  | { type: "REFRESH_COMPLETED"; tabId: string; expiresAt: number; isAuthenticated: boolean }
-  | { type: "LOGOUT"; tabId: string }
-  | { type: "AUTH_STATE_SYNC"; tabId: string; isAuthenticated: boolean; expiresAt: number | null };
+export type WorkerMessage =
+  | { kind: "ready" }
+  | { kind: "result"; id: number; result: IRes<unknown> }
+  | { kind: "authState"; id: number; state: AuthState }
+  | { kind: "refreshed"; id: number; ok: boolean }
+  | { kind: "void"; id: number }
+  | { kind: "failure"; id: number; message: string }
+  | { kind: "authChanged"; state: AuthState }
+  | { kind: "authFailure" }
+  | { kind: "log"; entry: unknown };
