@@ -174,7 +174,8 @@ useEffect(() => {
 
 ```ts
 interface AuthState {
-  isAuthenticated: boolean;      // has an access token that isn't expired
+  isAuthenticated: boolean;      // header mode: a non-expired access token
+                                 // cookie mode: a session the server confirmed
   expiresAt: number | null;      // epoch ms, or null for opaque tokens
   user?: unknown;                // whatever login/refresh returned as `user`
 }
@@ -194,6 +195,46 @@ stop(); // unsubscribe
 `onAuthStateChange` fires on login, logout, refresh, `setTokens`, `setUser`, and when another tab changes state. Listener exceptions are caught, so one bad subscriber can't break auth.
 
 > `isAuthenticated` is `true` for an *opaque* (non-JWT) token, because the client can't know its expiry. It lets the server decide via a 401.
+
+---
+
+## Cookie mode: knowing whether you're logged in
+
+With `authMode: "cookie"` the tokens are httpOnly, so **JavaScript can never read them**. There is nothing on the client that says "logged in" — the cookie is invisible to `document.cookie` by design.
+
+The client therefore tracks the session from what the server actually does:
+
+| Event | `isAuthenticated` |
+|---|---|
+| `login()` returns 2xx | `true` |
+| any authenticated request returns 2xx | `true` |
+| a refresh succeeds | `true` |
+| a request 401/403s after the retry flow | `false` |
+| `logout()` | `false` |
+| a fresh page load | `false` **until you ask the server** |
+
+That last row is the important one. After a reload the cookie is still in the browser and requests will succeed — but the client has no way to know that yet. Ask explicitly, once, on startup:
+
+```ts
+// Populates `user` too, if the endpoint returns one.
+const state = await api.restoreSession("/api/auth/me");
+
+if (state.isAuthenticated) {
+  // already signed in
+}
+```
+
+Omit the URL to probe the refresh endpoint instead:
+
+```ts
+await api.restoreSession();
+```
+
+In header mode `restoreSession()` makes no request — the stored token already answers the question — so it is safe to call unconditionally.
+
+Multi-tab sync works in cookie mode too: the cookie is shared across tabs by the browser, so a login, refresh or logout in one tab updates the others. See [[Multi-Tab Sync]].
+
+> Before v1.0.2 `isAuthenticated` was derived purely from a readable access token, so in cookie mode it was **permanently `false`**, even immediately after a successful login.
 
 ### `onAuthFailure`
 

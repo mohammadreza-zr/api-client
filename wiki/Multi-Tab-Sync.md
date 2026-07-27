@@ -9,6 +9,34 @@ createClient({ multiTab: false }); // opt out
 
 The channel name is `${storageKey}.auth`, i.e. `apiclient.auth` by default.
 
+Sync runs from wherever the client runs — including inside the Web Worker, which has its own `BroadcastChannel`.
+
+> Fixed in v1.0.2: the runtime check treated any scope without `window` as the server, and a worker has no `window`. So in the default worker mode the channel was never opened and **cross-tab sync silently did nothing**. Tabs only converged on the next 401.
+
+Sync also relies on tabs sharing storage, so pair it with a persistent kind — with the default `"memory"` each tab keeps its own tokens and only `logout` propagates.
+
+### Cookie mode
+
+`authMode: "cookie"` works with multi-tab sync, and needs no `storage` setting: the httpOnly cookie is scoped to the origin, so **every tab already shares one session** by construction. The channel is only there to tell the other tabs that it changed.
+
+| Event in tab A | Tab B |
+|---|---|
+| `login()` | becomes authenticated |
+| refresh | stays authenticated |
+| `logout()` | becomes logged out |
+
+One caveat: `state.user` is not broadcast — it is never persisted or sent over the channel in either auth mode. A tab that learns about a login from a sibling knows it is authenticated but has no user object until it fetches one:
+
+```ts
+api.onAuthStateChange(async (state) => {
+  if (state.isAuthenticated && !state.user) {
+    await api.restoreSession("/api/auth/me");   // fills in `user`
+  }
+});
+```
+
+> Fixed in v1.0.2: cookie mode has no shared storage to re-read, so the "another tab signed in" path did nothing and only `logout` propagated.
+
 ---
 
 ## What it solves

@@ -90,6 +90,35 @@ console.log(res.statusCode, res.message, res.error);
 
 ---
 
+### Requests go to my own app instead of the API
+
+Symptom: a `GET /users` shows up in the Network tab as `https://my-app.com/users` and returns your `index.html` (or a 404 from your own router) rather than hitting the API.
+
+That means `baseUrl` resolved to `""`. Check what it actually resolved to:
+
+```ts
+import { detectBaseUrl } from "@mrzr/api-client";
+
+console.log(JSON.stringify(detectBaseUrl())); // "" means nothing was found
+```
+
+Common causes:
+
+- **The variable isn't exposed to the client.** Browser bundlers only inline names with the right prefix. `API_URL` works on the server but is stripped from the browser bundle — use `NEXT_PUBLIC_API_URL`, `VITE_API_URL`, `NUXT_PUBLIC_API_URL` or `PUBLIC_API_URL`.
+- **You used a custom variable name.** Auto-detection only knows the names listed in [[Client Options]]. Pass it yourself: `createClient({ baseUrl: import.meta.env.MY_API })`.
+- **Config is loaded at runtime**, after the bundle was built. Set `globalThis.__API_BASE_URL__` before creating the client, or pass `baseUrl` explicitly.
+- **The dev server wasn't restarted** after editing `.env`. Most bundlers only read it at startup.
+
+Being explicit always beats detection:
+
+```ts
+export const api = createClient({ baseUrl: import.meta.env.VITE_API_URL });
+```
+
+> Fixed in v1.0.2. Earlier versions only read env vars through a *dynamic* `process.env[key]` index, which bundlers cannot inline and browsers don't have — so auto-detection always returned `""` on the client, and in worker mode regardless of environment.
+
+---
+
 ### `Worker not initialized`
 
 A request was made before the worker signalled `ready`, or after `destroy()`. The client awaits readiness internally, so this almost always means the client was destroyed and then reused. Create a new one.
@@ -104,13 +133,140 @@ Pending promises reject with this when `destroy()` is called. Make sure you aren
 
 ## Behaviour problems
 
+### I fixed a bug / upgraded, but the old behaviour is still there
+
+Almost always a **stale or missing build** rather than the bug itself.
+
+`dist/` is git-ignored and generated. Packing or linking without building ships
+whatever was there last — or nothing at all. Check what you actually installed:
+
+```bash
+grep -c storageResult node_modules/@mrzr/api-client/dist/index.js
+# 0 → stale build predating the storage fix
+```
+
+The build runs from the `prepare` hook, so `npm link`, `npm pack` and folder
+installs all rebuild automatically. But `prepare` runs **once**, at link time —
+if you're linked and editing the library, keep `npm run dev` running or the
+consumer keeps seeing the build from when you linked.
+
+Then clear stale copies:
+
+```bash
+rm -rf node_modules/.vite .next/cache   # bundler caches hold the old module
+```
+
+---
+
+### Worker mode: relative URLs fail (`Failed to parse URL`)
+
+A Blob worker's base URL is `blob:http://your-origin/uuid`, and relative paths
+cannot resolve against it — unlike on the main thread, where they resolve
+against the page origin.
+
+Fixed in v1.0.2: the host now passes the page origin to the worker, so relative
+URLs behave identically in both modes. On earlier versions the workaround was:
+
+```ts
+baseUrl: import.meta.client ? window.location.origin : config.public.apiUrl,
+```
+
+which is no longer needed — and was a footgun during SSR, where `window` is
+undefined.
+
+---
+
+### Cookie mode: `isAuthenticated` is always false
+
+With `authMode: "cookie"` the tokens are httpOnly, so JS cannot read them. The
+client only learns about a session from the server's responses.
+
+- **Right after login it should now be `true`** — a 2xx from `login()` marks the
+  session active. If it isn't, upgrade: before v1.0.2 `isAuthenticated` required
+  a readable access token, so cookie mode reported `false` forever.
+- **On a fresh page load it starts `false` by design.** The cookie is there, but
+  invisible. Ask the server once on startup:
+
+  ```ts
+  const state = await api.restoreSession("/api/auth/me");
+  ```
+
+- **If it flips to `false` unexpectedly**, a request returned 401/403 after the
+  refresh flow. That is the server rejecting the cookie — check that it is
+  actually being sent (`credentials: "include"`, and for a cross-origin API,
+  `Access-Control-Allow-Credentials: true` with an explicit origin).
+
+---
+
+### User is logged out after every page reload
+
+First, check whether the tokens are being written at all — look for `apiclient.tokens` in DevTools → Application → Local Storage (or Cookies).
+
+**If nothing is stored:**
+
+- `storage` defaults to `"memory"`, which is *designed* not to survive a reload. Set it explicitly:
+
+  ```ts
+  createClient({ storage: "local" });
+  ```
+
+- On **v1.0.1 and earlier this was a bug**: in worker mode (the default) `"local"`, `"session"` and `"cookie"` all silently discarded every write, because the worker built the adapter in a scope with no `localStorage`. Upgrade to v1.0.2+, where the main thread owns the adapter.
+
+**If the tokens are stored but you're still logged out:**
+
+- Your server may not return them in a shape the default extractor recognises. Supply `extractTokens` — but note that opts out of worker mode.
+- Check `storageKey`: two clients with different keys don't share a session.
+- In `authMode: "cookie"`, nothing is stored locally by design; the browser holds httpOnly cookies and the session depends on those, not on `storage`.
+
+Confirm the round trip:
+
+```ts
+await api.login({ email, password });
+console.log(await api.getAuthState()); // isAuthenticated: true
+// reload, then:
+console.log(await api.getAuthState()); // should still be true
+```
+
+---
+
+### Nuxt: tokens don't persist
+
+`createClient` runs on both server and client in Nuxt. On the server there is no `localStorage`, so create the client in a **client-side plugin** — or guard on `import.meta.client` — and keep one shared instance rather than one per component:
+
+```ts
+// plugins/api.client.ts
+export default defineNuxtPlugin(() => {
+  const api = createClient({
+    baseUrl: useRuntimeConfig().public.apiUrl,
+    storage: "local",
+  });
+  return { provide: { api } };
+});
+```
+
+Creating a fresh client on every render also loses the session, because each one hydrates independently.
+
+For SSR that needs the token on the server too, use `authMode: "cookie"` with httpOnly cookies, or the `"cookie"` adapter so the server can read the record.
+
+---
+
+### Logging out in one tab doesn't affect the others
+
+Check, in order:
+
+1. `multiTab: false` in your options.
+2. `storage: "memory"` (the default) — tabs share no storage, so a login in tab A can't be adopted by tab B. Logout still propagates. Use `"local"` or `"cookie"` for full sync.
+3. Different **origins** or different `storageKey` values — neither shares a channel.
+4. **v1.0.1 and earlier:** cross-tab sync was silently dead in worker mode (the default), because the worker scope has no `window` and was misdetected as SSR. Upgrade to v1.0.2+.
+
+---
+
 ### `api.isWorker` is `false` in the browser
 
 Check, in order:
 
 1. `worker: false` in your options.
-2. A **custom storage object** — `storage: { get, set, clear }` disables the worker.
-3. `extractTokens` or `buildRefreshBody` supplied — same.
+2. `extractTokens` or `buildRefreshBody` supplied — functions can't cross the boundary.
 4. CSP blocking `blob:` — add `worker-src 'self' blob:`.
 5. SSR — expected; `window` is undefined.
 

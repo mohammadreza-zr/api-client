@@ -279,6 +279,67 @@ const { data: users, error } = await useAsyncData("users", () =>
 </template>
 ```
 
+### Nuxt + httpOnly cookie auth
+
+When your Nuxt server routes set httpOnly cookies (`/api/auth/*`), the API lives
+on the **same origin** as the app, and the tokens are unreadable from JS.
+
+```ts
+// plugins/api.client.ts   ← .client so it never runs during SSR
+import { createClient } from "@mrzr/api-client";
+
+export default defineNuxtPlugin(() => {
+  const api = createClient({
+    // Same-origin routes: leave baseUrl empty and let them resolve
+    // against the current origin. Only set it for a separate API host.
+    authMode: "cookie",
+    credentials: "include",
+    loginUrl: "/api/auth/login",
+    refreshUrl: "/api/auth/refresh",
+    logoutUrl: "/api/auth/logout",
+  });
+
+  return { provide: { api } };
+});
+```
+
+Then detect an existing session once, on startup — the cookie survives a reload
+but is invisible to JS, so the client has to ask:
+
+```vue
+<script setup lang="ts">
+const { $api } = useNuxtApp();
+
+const state = ref(await $api.restoreSession("/api/auth/me"));
+
+async function login() {
+  await $api.login({ email: email.value, password: password.value });
+  state.value = await $api.getAuthState();   // now { isAuthenticated: true, user }
+}
+
+async function logout() {
+  await $api.logout();
+  state.value = await $api.getAuthState();
+}
+</script>
+```
+
+A few things worth getting right here:
+
+- **Use `plugins/api.client.ts`**, not `plugins/api.ts`. A universal plugin also
+  runs on the server, where each request would build its own client.
+- **You no longer need `baseUrl: window.location.origin`.** That workaround was
+  necessary before v1.0.2: a Blob worker's base is a `blob:` URL, which relative
+  paths cannot resolve against, so requests failed in worker mode. The host now
+  falls back to the page origin automatically. Setting it manually still works,
+  but guard it for SSR — `window` doesn't exist there.
+- **`restoreSession()` is what makes reloads work.** Without it `getAuthState()`
+  reports `false` on a fresh load even though the cookie is present and requests
+  succeed.
+- Cookies must reach the server: keep `credentials: "include"`, and for a
+  separate API origin the server needs `Access-Control-Allow-Credentials: true`
+  plus an explicit (non-`*`) allowed origin.
+
 ---
 
 ## Vue 3 (plain)

@@ -14,8 +14,18 @@ export class AuthStore {
   private expiry: number | null = null;
   private user: unknown;
 
+  /**
+   * Cookie mode has no readable token, so authentication is tracked as an
+   * explicit flag: set on a successful login/refresh, cleared on logout or a
+   * failed refresh. In header mode this stays `false` and presence of an
+   * access token decides instead.
+   */
+  private session = false;
+
   private inFlight: Promise<string | null> | null = null;
   private listeners = new Set<(state: AuthState) => void>();
+  /** The most recent persist, so callers can await durability. */
+  private pendingWrite: Promise<void> = Promise.resolve();
 
   constructor(private storage?: TokenStorage) {}
 
@@ -46,10 +56,25 @@ export class AuthStore {
 
   get state(): AuthState {
     return {
-      isAuthenticated: Boolean(this.access) && !this.isExpired(),
+      isAuthenticated: this.session || (Boolean(this.access) && !this.isExpired()),
       expiresAt: this.expiry,
       user: this.user,
     };
+  }
+
+  /**
+   * Marks the session active without a token, for httpOnly cookie mode.
+   * The cookie itself is invisible to JS, so the server's response is the
+   * only evidence we get that a session exists.
+   */
+  markSession(active: boolean): void {
+    if (this.session === active) return;
+    this.session = active;
+    this.emit();
+  }
+
+  get hasSession(): boolean {
+    return this.session;
   }
 
   isExpired(skewMs = 0): boolean {
@@ -72,8 +97,19 @@ export class AuthStore {
       getTokenExpiry(tokens.accessToken ?? this.access) ??
       this.expiry;
 
-    if (persist) void this.persist();
+    if (persist) this.pendingWrite = this.persist();
     this.emit();
+  }
+
+  /**
+   * Resolves once the last write has actually landed.
+   *
+   * Persisting is fire-and-forget so requests are never blocked on storage,
+   * but `setTokens` and `login` must not resolve before the tokens are durable
+   * — otherwise an immediate reload races the write and loses the session.
+   */
+  async flush(): Promise<void> {
+    await this.pendingWrite;
   }
 
   clear(persist = true): void {
@@ -81,8 +117,9 @@ export class AuthStore {
     this.refresh = undefined;
     this.expiry = null;
     this.user = undefined;
+    this.session = false;
     if (persist && this.storage) {
-      void Promise.resolve(this.storage.clear()).catch(() => {});
+      this.pendingWrite = Promise.resolve(this.storage.clear()).catch(() => {});
     }
     this.emit();
   }

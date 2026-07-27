@@ -2,7 +2,7 @@
 
 import { CoreClient } from "../internal/core-client";
 import type { HostMessage, WorkerMessage } from "./protocol";
-import type { LogEntry, RequestConfig } from "../types";
+import type { LogEntry, RequestConfig, TokenPair, TokenStorage } from "../types";
 
 /**
  * Worker-side host.
@@ -18,6 +18,53 @@ const aborters = new Map<number, AbortController>();
 
 const send = (msg: WorkerMessage): void => self.postMessage(msg);
 
+// ── storage bridge ───────────────────────────────────────
+
+let storageSeq = 0;
+const storageWaiters = new Map<number, (tokens: TokenPair | null) => void>();
+
+/**
+ * Persists through the main thread.
+ *
+ * `localStorage`, `sessionStorage` and `document.cookie` are Window APIs with
+ * no worker equivalent, so a worker-side adapter would silently discard every
+ * write — which is exactly the bug this replaces. The host owns the actual
+ * storage; this just forwards the three operations to it.
+ *
+ * Only used for explicitly persistent adapters. `"memory"` stays in the worker
+ * so the default configuration keeps tokens off the main thread entirely.
+ */
+class HostStorage implements TokenStorage {
+  private ask(op: "get" | "set" | "clear", tokens?: TokenPair): Promise<TokenPair | null> {
+    const id = ++storageSeq;
+    return new Promise<TokenPair | null>((resolve) => {
+      // A host that never answers must not wedge the auth flow forever.
+      const timer = setTimeout(() => {
+        if (storageWaiters.delete(id)) resolve(null);
+      }, 5_000);
+
+      storageWaiters.set(id, (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      });
+
+      send({ kind: "storage", id, op, tokens });
+    });
+  }
+
+  get(): Promise<TokenPair | null> {
+    return this.ask("get");
+  }
+
+  async set(tokens: TokenPair): Promise<void> {
+    await this.ask("set", tokens);
+  }
+
+  async clear(): Promise<void> {
+    await this.ask("clear");
+  }
+}
+
 self.onmessage = async (event: MessageEvent<HostMessage>) => {
   const msg = event.data;
   if (!msg) return;
@@ -25,8 +72,13 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
   try {
     switch (msg.kind) {
       case "init": {
+        // Persistent kinds are proxied to the host; memory stays local.
+        const kind = msg.options.storage ?? "memory";
+        const storage = kind === "memory" ? undefined : new HostStorage();
+
         client = new CoreClient({
           ...msg.options,
+          storage,
           multiTab: msg.options.multiTab,
           onAuthStateChanged: (state) => send({ kind: "authChanged", state }),
           onAuthFailure: () => send({ kind: "authFailure" }),
@@ -55,6 +107,15 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
         break;
       }
 
+      case "storageResult": {
+        const waiter = storageWaiters.get(msg.id);
+        if (waiter) {
+          storageWaiters.delete(msg.id);
+          waiter(msg.tokens);
+        }
+        break;
+      }
+
       case "abort": {
         aborters.get(msg.id)?.abort();
         aborters.delete(msg.id);
@@ -79,6 +140,12 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
         if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
         await client.setTokens(msg.tokens);
         send({ kind: "void", id: msg.id });
+        break;
+      }
+
+      case "restoreSession": {
+        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
+        send({ kind: "authState", id: msg.id, state: await client.restoreSession(msg.url) });
         break;
       }
 

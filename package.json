@@ -1,6 +1,6 @@
 {
   "name": "@mrzr/api-client",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Dependency-free typed REST client with automatic token refresh, Web Worker isolation and cross-tab auth sync. Works in React, Vue, Next.js, Nuxt, SSR and plain JS.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -35,9 +35,9 @@
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src scripts",
-    "verify": "npm run build && node verify/run.mjs && node verify/worker.mjs && node verify/audit.mjs && node verify/features.mjs",
+    "verify": "npm run build && node verify/run.mjs && node verify/worker.mjs && node verify/audit.mjs && node verify/features.mjs && node verify/baseurl.mjs && node verify/storage.mjs && node verify/cookie-auth.mjs && node verify/package.mjs",
     "docs:sync": "bash scripts/sync-wiki.sh",
-    "prepublishOnly": "npm run build"
+    "prepare": "node scripts/prepare.mjs"
   },
   "keywords": [
     "fetch",

@@ -103,8 +103,18 @@ export class CoreClient {
     }
 
     if (msg.type === "refreshed" || msg.type === "login") {
-      // Another tab rotated the tokens. In cookie mode the browser already has
-      // the new cookie; in header mode we re-read the shared storage.
+      /*
+       * Cookie mode: there is no shared storage to re-read — `hydrate()` is a
+       * no-op without an adapter — but the httpOnly cookie is origin-scoped,
+       * so the browser has already given this tab the very same session. The
+       * sibling's success is therefore proof that we are signed in too.
+       */
+      if (this.opts.authMode === "cookie") {
+        this.auth.markSession(true);
+        return;
+      }
+
+      // Header mode: another tab rotated the tokens into shared storage.
       void this.auth.hydrate().then(() => this.auth.emit());
     }
   }
@@ -193,6 +203,7 @@ export class CoreClient {
         } else if (this.opts.authMode === "cookie") {
           // Server rotated httpOnly cookies and returned no body.
           this.auth.apply({ expiresAt: undefined });
+          this.auth.markSession(true);
         } else {
           this.failAuth();
           return null;
@@ -227,6 +238,22 @@ export class CoreClient {
       { method, url, body, config: config as RequestConfig<unknown> },
       this.context(),
     );
+
+    /*
+     * Cookie mode: infer the session from what the server actually does.
+     *
+     * The cookie is httpOnly, so on a fresh page load there is nothing to
+     * read and no way to know whether a session exists until a request is
+     * made. Any authenticated 2xx proves one does; a 401/403 that survived
+     * the refresh-and-retry flow proves one doesn't.
+     */
+    if (this.opts.authMode === "cookie" && !config?.skipAuth) {
+      if (result.status) {
+        this.auth.markSession(true);
+      } else if (result.statusCode === 401 || result.statusCode === 403) {
+        this.auth.markSession(false);
+      }
+    }
 
     if (!result.status && !config?.hideErrorMessage) {
       this.hooks.onError?.(result);
@@ -264,8 +291,18 @@ export class CoreClient {
     if (result.status) {
       const tokens = this.extractTokens(result.data);
       if (tokens) this.auth.apply(tokens);
+      /*
+       * In cookie mode the tokens are httpOnly: the body carries no access
+       * token and `document.cookie` cannot see one either. A 2xx from the
+       * login endpoint is the only signal we get, so trust it and mark the
+       * session active — otherwise `isAuthenticated` could never become true.
+       */
+      if (this.opts.authMode === "cookie") this.auth.markSession(true);
       const user = extractUser(result.data);
       if (user !== undefined) this.auth.setUser(user);
+      // A successful login is usually followed by a redirect; make sure the
+      // tokens are durable before we hand control back.
+      await this.auth.flush();
       this.tabs.post({ type: "login", tabId: this.tabs.tabId, expiresAt: this.auth.expiresAt });
 
       // Honour the caller's unwrapping preference for the returned value.
@@ -294,6 +331,8 @@ export class CoreClient {
     }
 
     this.auth.clear();
+    // Likewise on the way out: the record must be gone before any redirect.
+    await this.auth.flush();
     this.tabs.post({ type: "logout", tabId: this.tabs.tabId });
     return result;
   }
@@ -301,7 +340,44 @@ export class CoreClient {
   async setTokens(tokens: TokenPair): Promise<void> {
     await this.hydrated;
     this.auth.apply(tokens);
+    // Await durability: callers seed tokens then often navigate immediately.
+    await this.auth.flush();
     this.tabs.post({ type: "login", tabId: this.tabs.tabId, expiresAt: this.auth.expiresAt });
+  }
+
+  /**
+   * Determines whether a session already exists — the missing piece for
+   * httpOnly cookie auth on a fresh page load.
+   *
+   * The cookie cannot be read from JS, so the only way to know is to ask the
+   * server. Calls `url` when given, otherwise the refresh endpoint, and
+   * records the outcome. Returns the resulting state.
+   *
+   * In header mode this just reports the rehydrated state without a request:
+   * the stored token already answers the question.
+   */
+  async restoreSession(url?: string): Promise<AuthState> {
+    await this.hydrated;
+
+    if (this.opts.authMode !== "cookie") return this.auth.state;
+
+    if (url) {
+      // A probe endpoint (`/api/auth/me`) also gives us the user object.
+      const probe = await this.send<unknown>("GET", url, undefined, {
+        refreshTokenCheck: false,
+        hideErrorMessage: true,
+      } as RequestConfig<unknown>);
+
+      if (probe.status) {
+        const user = extractUser(probe.data) ?? probe.data;
+        if (user !== undefined) this.auth.setUser(user);
+      }
+      return this.auth.state;
+    }
+
+    // No probe URL: a successful refresh proves the cookie is still valid.
+    await this.refresh();
+    return this.auth.state;
   }
 
   async getAuthState(): Promise<AuthState> {

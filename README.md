@@ -306,7 +306,7 @@ Streams are single-use by nature, so prefer `uploadSkewMs` when streaming. Note 
 
 | Option | Default | Description |
 |---|---|---|
-| `baseUrl` | auto-detected | Falls back to `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BASE_URL`, `VITE_API_URL`, `VITE_BASE_URL`, `NUXT_PUBLIC_API_URL`, `API_URL` |
+| `baseUrl` | auto-detected | Falls back to `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BASE_URL`, `VITE_API_URL`, `VITE_BASE_URL`, `NUXT_PUBLIC_API_URL`, `PUBLIC_API_URL`, `API_URL`, or `globalThis.__API_BASE_URL__`. Works in the browser, on the server, and in worker mode |
 | `timeout` | `30000` | Per-request timeout in ms |
 | `throwError` | `true` | Reject with `ApiError` on failure. Set `false` for the never-throwing envelope. Overridable per request |
 | `headers` | `{}` | Merged into every request |
@@ -371,7 +371,8 @@ createClient({
     set: (tokens) => myStore.write(JSON.stringify(tokens)),
     clear: () => myStore.remove(),
   },
-  worker: false, // custom adapters can't cross the worker boundary
+  // Worker mode is preserved: the adapter runs on the main thread and the
+  // worker persists through it.
 });
 ```
 
@@ -489,6 +490,7 @@ api.logout<R>(config?)           // clear tokens everywhere
 api.setTokens({ accessToken, refreshToken, expiresAt? })
 api.refresh()                    // force a refresh; null on failure
 api.getAuthState()               // { isAuthenticated, expiresAt, user }
+api.restoreSession("/api/auth/me") // cookie mode: detect an existing session on boot
 api.onAuthStateChange(listener)  // returns unsubscribe
 api.isWorker                     // whether requests run in a worker
 api.destroy()                    // terminate worker + close channel

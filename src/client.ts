@@ -7,7 +7,7 @@ import type {
 } from "./types";
 import { ApiError } from "./types";
 import { CoreClient } from "./internal/core-client";
-import { hasWorker, isServer } from "./internal/env";
+import { hasWorker, isServer, isWorkerScope } from "./internal/env";
 import { WorkerHost } from "./worker/worker-host";
 import { WORKER_SOURCE } from "./worker/worker-source";
 
@@ -37,6 +37,23 @@ export interface ApiClient {
   /** Current auth state. Never contains tokens. */
   getAuthState(): Promise<AuthState>;
 
+  /**
+   * Establishes whether a session already exists, for `authMode: "cookie"`.
+   *
+   * httpOnly cookies are invisible to JavaScript, so after a page reload the
+   * client cannot tell a logged-in visitor from a logged-out one until it
+   * asks the server. Call this once on startup:
+   *
+   * ```ts
+   * const state = await api.restoreSession("/api/auth/me");
+   * ```
+   *
+   * Pass a probe endpoint to also populate `state.user`, or omit it to try
+   * the refresh endpoint instead. In header mode this resolves with the
+   * rehydrated state and makes no request.
+   */
+  restoreSession(url?: string): Promise<AuthState>;
+
   /** Subscribe to auth changes. Returns an unsubscribe function. */
   onAuthStateChange(listener: (state: AuthState) => void): () => void;
 
@@ -63,6 +80,7 @@ type Implementation = Pick<
   | "setTokens"
   | "refresh"
   | "getAuthState"
+  | "restoreSession"
   | "onAuthStateChange"
   | "destroy"
 >;
@@ -88,10 +106,12 @@ export function createClient(options: ClientOptions = {}): ApiClient {
   const canUseWorker =
     wantsWorker &&
     !isServer() &&
+    // Already inside a worker: run inline rather than nesting another one.
+    !isWorkerScope() &&
     hasWorker() &&
     WORKER_SOURCE.length > 0 &&
-    // A custom storage object can't be cloned into a worker.
-    typeof options.storage !== "object" &&
+    // A custom storage object stays on the main thread and is served to the
+    // worker over the storage bridge, so it no longer forces inline mode.
     !options.extractTokens &&
     !options.buildRefreshBody;
 
@@ -133,6 +153,7 @@ function wrap(impl: Implementation, isWorker: boolean, options: ClientOptions): 
     setTokens: (tokens) => impl.setTokens(tokens),
     refresh: () => impl.refresh(),
     getAuthState: () => impl.getAuthState(),
+    restoreSession: (url) => impl.restoreSession(url),
     onAuthStateChange: (listener) => impl.onAuthStateChange(listener),
     isWorker,
     destroy: () => impl.destroy(),
