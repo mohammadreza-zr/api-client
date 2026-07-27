@@ -7,6 +7,14 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // Build scripts run in Node and legitimately use its globals. The .ts one
+    // gets them from `/// <reference types="node" />`; plain .mjs needs this.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: { console: "readonly", process: "readonly" },
+    },
+  },
+  {
     languageOptions: {
       parserOptions: { ecmaVersion: 2022, sourceType: "module" },
     },

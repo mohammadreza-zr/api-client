@@ -145,8 +145,11 @@ grep -c storageResult node_modules/@mrzr/api-client/dist/index.js
 # 0 → stale build predating the storage fix
 ```
 
-`prepack` builds automatically for `npm pack` and tarball installs. For
-`npm link`, build first (`npm run build`) — linking does not always trigger it.
+The build runs from the `prepare` hook, so `npm link`, `npm pack` and folder
+installs all rebuild automatically. But `prepare` runs **once**, at link time —
+if you're linked and editing the library, keep `npm run dev` running or the
+consumer keeps seeing the build from when you linked.
+
 Then clear stale copies:
 
 ```bash

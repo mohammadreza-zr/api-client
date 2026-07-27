@@ -233,22 +233,36 @@ linking without building first ships **nothing** — or, worse, a stale build fr
 an earlier commit, which looks exactly like the bug you just fixed still being
 broken.
 
-`prepack` now runs the build automatically, so all of these are safe:
+The build runs from the `prepare` hook, which npm executes for **all** of
+these — including `npm link`, the one hook `prepack` and `prepublishOnly` both
+miss:
 
 ```bash
-npm pack                      # tarball always contains a fresh dist/
-npm install /path/to/api-client            # folder install
+npm link                                   # ✅ builds
+npm pack                                   # ✅ builds
+npm install /path/to/api-client            # ✅ builds (folder install)
 npm install /path/to/mrzr-api-client-1.0.1.tgz
 ```
 
-`npm link` and `npm install <folder>` on some npm versions **do not** run
-`prepack`. When linking, build explicitly and keep it building:
+Which hook fires for what:
+
+| Hook | `publish` | `pack` | folder install | **`link`** |
+|---|:--:|:--:|:--:|:--:|
+| `prepublishOnly` | ✅ | ❌ | ❌ | ❌ |
+| `prepack` | ✅ | ✅ | ✅ | ❌ |
+| **`prepare`** | ✅ | ✅ | ✅ | ✅ |
+
+When linking, use `npm run dev` alongside it so edits keep rebuilding —
+`prepare` runs once at link time, not on every change:
 
 ```bash
-npm run build     # once
-npm run dev       # or: rebuild on change
 npm link
+npm run dev       # rebuild on change
 ```
+
+`prepare` also fires on a plain `npm install` in this repo. It routes through
+`scripts/prepare.mjs`, which skips the build when the toolchain is absent, so
+`npm ci --omit=dev` still succeeds instead of failing with `tsx: not found`.
 
 After installing into your app, confirm you got the build you expect:
 
@@ -257,5 +271,6 @@ grep -c storageResult node_modules/@mrzr/api-client/dist/index.js
 ```
 
 `verify/package.mjs` guards all of this: it packs a real tarball, installs it
-into a throwaway project, and asserts the installed code both contains the
-fixes and behaves — so a packaging regression fails CI instead of reaching you.
+into a throwaway project, runs `npm link` from a pristine tree, and asserts the
+installed code both contains the fixes and behaves — so a packaging regression
+fails CI instead of reaching you.

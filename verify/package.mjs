@@ -50,7 +50,7 @@ try {
   check("npm pack produced a tarball", existsSync(tarball), packed);
 
   check(
-    "prepack rebuilt dist/ automatically (prepublishOnly does NOT run for pack)",
+    "prepare rebuilt dist/ automatically (prepublishOnly does NOT run for pack)",
     existsSync("dist/index.js"),
   );
 
@@ -177,6 +177,70 @@ try {
   const behaviour = JSON.parse(run("node", [behaviourProbe], consumer).trim());
   check("installed build writes tokens to storage", behaviour.wrote === true);
   check("installed build restores the session after a reload", behaviour.survives === true);
+
+  console.log("\nnpm link builds too");
+
+  /*
+   * `prepare` is the ONLY lifecycle hook npm runs for `npm link`. `prepack`
+   * covers pack/publish/folder-installs but is skipped entirely on link, so a
+   * linked package silently served whatever stale `dist/` happened to exist —
+   * which is how a "fixed" bug keeps reproducing in a local test app.
+   */
+  const pkgScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts ?? {};
+  check("build is wired to `prepare` (the hook npm link runs)", Boolean(pkgScripts.prepare));
+  check(
+    "build is NOT wired to prepack/prepublishOnly alone (both miss npm link)",
+    !pkgScripts.prepack && !pkgScripts.prepublishOnly,
+    JSON.stringify({ prepack: pkgScripts.prepack, prepublishOnly: pkgScripts.prepublishOnly }),
+  );
+
+  rmSync("dist", { recursive: true, force: true });
+  const globalPrefix = join(work, "npm-global");
+  run("mkdir", ["-p", globalPrefix], work);
+  execFileSync("npm", ["link"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, NPM_CONFIG_PREFIX: globalPrefix },
+  });
+  check("npm link rebuilt dist/ from a pristine tree", existsSync("dist/index.js"));
+  check(
+    "the linked build carries the fixes",
+    readFileSync("dist/index.js", "utf8").includes("storageResult"),
+  );
+
+  console.log("\nproduction installs are not broken by the prepare hook");
+
+  /*
+   * `prepare` also fires on a plain `npm install` in this repo, including
+   * `npm ci --omit=dev` where tsup/tsx are absent. A bare
+   * `"prepare": "npm run build"` hard-fails those with `tsx: not found`, so
+   * the hook has to detect a missing toolchain and skip.
+   */
+  const prodProbe = join(work, "prod");
+  run("mkdir", ["-p", prodProbe], work);
+  writeFileSync(
+    join(prodProbe, "package.json"),
+    JSON.stringify(
+      { name: "prod-probe", version: "1.0.0", private: true, scripts: { prepare: pkgScripts.prepare } },
+      null,
+      2,
+    ),
+  );
+  // No node_modules at all → the toolchain check must fail closed, not throw.
+  let prodOk = true;
+  let prodOut = "";
+  try {
+    prodOut = execFileSync("node", [join(process.cwd(), "scripts/prepare.mjs")], {
+      cwd: prodProbe,
+      encoding: "utf8",
+      env: { ...process.env, npm_config_prefix: undefined },
+    });
+  } catch (err) {
+    prodOk = false;
+    prodOut = String(err.stderr ?? err.message);
+  }
+  check("prepare hook exits 0 when the build toolchain is absent", prodOk, prodOut.slice(0, 200));
 } catch (e) {
   fail++;
   console.error("\nUNEXPECTED:", e.message);
