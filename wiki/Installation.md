@@ -1,11 +1,11 @@
 # Installation
 
 ```bash
-npm install @mohammadreza-zr/api-client
+npm install @mrzr/api-client
 # or
-pnpm add @mohammadreza-zr/api-client
-yarn add @mohammadreza-zr/api-client
-bun add @mohammadreza-zr/api-client
+pnpm add @mrzr/api-client
+yarn add @mrzr/api-client
+bun add @mrzr/api-client
 ```
 
 The package ships **ESM + CJS + TypeScript declarations** and has **no runtime dependencies**.
@@ -48,18 +48,18 @@ Optional capabilities degrade gracefully when missing:
 
 ```ts
 // ESM / TypeScript / bundlers
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 ```
 
 ```js
 // CommonJS
-const { createClient } = require("@mohammadreza-zr/api-client");
+const { createClient } = require("@mrzr/api-client");
 ```
 
 ```html
 <!-- No build step -->
 <script type="module">
-  import { createClient } from "https://esm.sh/@mohammadreza-zr/api-client";
+  import { createClient } from "https://esm.sh/@mrzr/api-client";
 </script>
 ```
 
@@ -108,7 +108,7 @@ Content-Security-Policy: worker-src 'self' blob:;
 ## Verifying the install
 
 ```ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 
 const api = createClient({ baseUrl: "https://httpbin.org" });
 console.log(api.isWorker);            // true in a browser, false on the server

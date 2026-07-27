@@ -1,15 +1,15 @@
-# @mohammadreza-zr/api-client
+# @mrzr/api-client
 
 A typed REST client built on `fetch` with **zero runtime dependencies**.
 
 Automatic token refresh, Web Worker isolation so tokens never touch the main thread, and cross-tab auth sync — in one `createClient()` call that works the same everywhere.
 
 ```bash
-npm install @mohammadreza-zr/api-client
+npm install @mrzr/api-client
 ```
 
 ```ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 
 export const api = createClient({ baseUrl: "https://api.example.com" });
 
@@ -74,7 +74,7 @@ const { data } = await api.get<User[]>("/users");
 ## The 60-second tour
 
 ```ts
-import { createClient, ApiError } from "@mohammadreza-zr/api-client";
+import { createClient, ApiError } from "@mrzr/api-client";
 
 const api = createClient({
   baseUrl: "https://api.example.com",

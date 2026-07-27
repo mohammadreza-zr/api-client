@@ -6,7 +6,7 @@ Create the client **once** per app and import it everywhere. Creating a client s
 
 ```ts
 // lib/api.ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 
 export const api = createClient({
   baseUrl: "https://api.example.com",
@@ -53,7 +53,7 @@ Every method resolves with the same envelope, [`IRes<R>`](Responses-and-Errors):
 **Failed requests reject with an `ApiError` by default.**
 
 ```ts
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 
 try {
   const { data } = await api.get<User>("/users/1");
@@ -114,7 +114,7 @@ const state = await api.getAuthState(); // never contains tokens
 
 ```ts
 // lib/api.ts
-import { createClient, ApiError } from "@mohammadreza-zr/api-client";
+import { createClient, ApiError } from "@mrzr/api-client";
 
 export const api = createClient({
   baseUrl: import.meta.env.VITE_API_URL,

@@ -1,5 +1,5 @@
 {
-  "name": "@mohammadreza-zr/api-client",
+  "name": "@mrzr/api-client",
   "version": "1.0.0",
   "description": "Dependency-free typed REST client with automatic token refresh, Web Worker isolation and cross-tab auth sync. Works in React, Vue, Next.js, Nuxt, SSR and plain JS.",
   "type": "module",

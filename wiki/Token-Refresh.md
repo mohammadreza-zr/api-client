@@ -168,7 +168,7 @@ It works even when the client-wide `refreshSkewMs` is `0`, because it expresses 
 The expiry helpers are exported for your own use:
 
 ```ts
-import { getTokenExpiry, isTokenExpired } from "@mohammadreza-zr/api-client";
+import { getTokenExpiry, isTokenExpired } from "@mrzr/api-client";
 
 getTokenExpiry(token);          // epoch ms, or null if not a readable JWT
 isTokenExpired(token);          // boolean; false when expiry is unknown

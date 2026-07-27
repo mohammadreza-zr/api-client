@@ -16,7 +16,7 @@ Yes:
 
 ```html
 <script type="module">
-  import { createClient } from "https://esm.sh/@mohammadreza-zr/api-client";
+  import { createClient } from "https://esm.sh/@mrzr/api-client";
 </script>
 ```
 

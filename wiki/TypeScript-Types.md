@@ -3,7 +3,7 @@
 The complete public type surface. Everything here is importable.
 
 ```ts
-import type { IRes, ApiClient, ClientOptions /* … */ } from "@mohammadreza-zr/api-client";
+import type { IRes, ApiClient, ClientOptions /* … */ } from "@mrzr/api-client";
 ```
 
 ---
@@ -303,7 +303,7 @@ interface ApiClient {
 ```ts
 // api/users.ts
 import { api } from "@/lib/api";
-import type { ListResponse } from "@mohammadreza-zr/api-client";
+import type { ListResponse } from "@mrzr/api-client";
 
 export interface User { id: number; name: string; email: string }
 export interface CreateUser { name: string; email: string }

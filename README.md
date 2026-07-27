@@ -1,11 +1,11 @@
-# @mohammadreza-zr/api-client
+# @mrzr/api-client
 
 A typed REST client built on `fetch` with **zero runtime dependencies**.
 
 Automatic token refresh, Web Worker isolation so tokens never touch the main thread, and cross-tab auth sync — in one `createClient()` call that works the same everywhere.
 
 ```bash
-npm install @mohammadreza-zr/api-client
+npm install @mrzr/api-client
 ```
 
 - **Zero dependencies** — nothing but the platform `fetch`
@@ -40,7 +40,7 @@ The source for these pages is in [`wiki/`](./wiki) — edit there and run `./scr
 
 ```ts
 // lib/api.ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 
 export const api = createClient({
   baseUrl: "https://api.example.com",
@@ -49,7 +49,7 @@ export const api = createClient({
 
 ```ts
 import { api } from "./lib/api";
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 
 try {
   const { data } = await api.get<User[]>("/users");
@@ -68,7 +68,7 @@ That's it. Worker isolation, refresh and tab sync are on by default and degrade 
 **Failed requests reject with an `ApiError`.** This is the default because it is what every data-fetching library expects — TanStack Query, SWR and Vue Query all detect failure through a rejected promise, and it makes `await` behave the way you'd assume.
 
 ```ts
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 
 try {
   const { data } = await api.get<User>("/users/1");
@@ -387,7 +387,7 @@ Works out of the box — failures reject, which is exactly what the library expe
 
 ```tsx
 import { useQuery } from "@tanstack/react-query";
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 import { api } from "@/lib/api";
 
 export const userKeys = {
@@ -431,7 +431,7 @@ Because the client rejects on failure, `error` is a real `ApiError` and SWR's bu
 
 ```ts
 // Server component / route handler — worker is skipped automatically
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 import { cookies } from "next/headers";
 
 export async function getUsers() {
@@ -469,7 +469,7 @@ Prefer no try/catch in components? Create the client with `throwError: false` an
 
 ```html
 <script type="module">
-  import { createClient } from "https://esm.sh/@mohammadreza-zr/api-client";
+  import { createClient } from "https://esm.sh/@mrzr/api-client";
   const api = createClient({ baseUrl: "https://api.example.com" });
   console.log((await api.get("/health")).data);
 </script>

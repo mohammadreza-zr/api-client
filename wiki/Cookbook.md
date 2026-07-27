@@ -9,7 +9,7 @@ Practical patterns, copy-paste ready.
 The client retries a 401 exactly once. Everything else is your policy:
 
 ```ts
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -55,7 +55,7 @@ catch (e) {
 ## Paginating everything
 
 ```ts
-import type { ListResponse } from "@mohammadreza-zr/api-client";
+import type { ListResponse } from "@mrzr/api-client";
 
 export async function* paginate<T>(path: string, params: Record<string, unknown> = {}) {
   let page = 1;
@@ -344,7 +344,7 @@ for (const id of ids) {
 The client only needs `fetch`, so mock at that level:
 
 ```ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 
 function mockFetch(routes: Record<string, unknown>) {
   globalThis.fetch = (async (input: RequestInfo) => {

@@ -141,7 +141,7 @@ This is deliberate: an empty search box should not send `q=`, which many backend
 ### Using the serializer standalone
 
 ```ts
-import { buildQueryString } from "@mohammadreza-zr/api-client";
+import { buildQueryString } from "@mrzr/api-client";
 
 buildQueryString({ a: 1, b: { c: [1, 2] } });
 // "a=1&b%5Bc%5D=1&b%5Bc%5D=2"

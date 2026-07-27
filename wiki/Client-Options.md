@@ -3,7 +3,7 @@
 Everything `createClient(options)` accepts.
 
 ```ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 
 const api = createClient({ /* ClientOptions */ });
 ```

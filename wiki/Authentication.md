@@ -217,7 +217,7 @@ createClient({
 ```tsx
 import { createContext, useContext, useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import type { AuthState } from "@mohammadreza-zr/api-client";
+import type { AuthState } from "@mrzr/api-client";
 
 const AuthCtx = createContext<AuthState & { ready: boolean }>({
   isAuthenticated: false, expiresAt: null, ready: false,

@@ -14,7 +14,7 @@ export const api = createClient({ baseUrl: import.meta.env.VITE_API_URL });
 
 // features/users/queries.ts
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 import { api } from "@/lib/api";
 
 export const userKeys = {
@@ -100,7 +100,7 @@ Essential with multi-tab sync: signing out in another tab must not leave user da
 
 ```ts
 import useSWR from "swr";
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 import { api } from "@/lib/api";
 
 const fetcher = <T,>(url: string) => api.get<T>(url).then((r) => r.data);
@@ -134,7 +134,7 @@ Because the client rejects on failure, `error` is a real `ApiError` and SWR's re
 
 ```tsx
 import { useEffect, useState } from "react";
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 
 export function useApi<R>(fn: (signal: AbortSignal) => Promise<IRes<R>>, deps: unknown[] = []) {
   const [data, setData] = useState<R>();
@@ -173,7 +173,7 @@ const { data, error, loading } = useApi((signal) => api.get<User[]>("/users", { 
 
 ```ts
 // lib/server-api.ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 import { cookies } from "next/headers";
 
 export async function withApi<T>(fn: (api: ApiClient) => Promise<T>): Promise<T> {
@@ -216,7 +216,7 @@ await api.get("/feed", { next: { revalidate: 60 } } as never);
 ```ts
 // lib/api.ts
 "use client";
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 
 export const api = createClient({
   baseUrl: process.env.NEXT_PUBLIC_API_URL,
@@ -251,7 +251,7 @@ The browser then calls `/api/users` with a same-site httpOnly cookie and never s
 
 ```ts
 // plugins/api.ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 
 export default defineNuxtPlugin(() => {
   const config = useRuntimeConfig();
@@ -291,7 +291,7 @@ export const api = createClient({ baseUrl: import.meta.env.VITE_API_URL });
 ```vue
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 import { api } from "@/lib/api";
 
 const users = ref<User[]>([]);
@@ -319,7 +319,7 @@ Prefer no try/catch in components? Create the client with `throwError: false` an
 
 ```ts
 // src/lib/api.ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 import { browser } from "$app/environment";
 import { PUBLIC_API_URL } from "$env/static/public";
 
@@ -359,7 +359,7 @@ export const load = async ({ fetch }) => ({
 ```ts
 // api.service.ts
 import { Injectable } from "@angular/core";
-import { createClient, type ApiClient } from "@mohammadreza-zr/api-client";
+import { createClient, type ApiClient } from "@mrzr/api-client";
 import { environment } from "../environments/environment";
 
 @Injectable({ providedIn: "root" })
@@ -389,7 +389,7 @@ users$ = defer(() => from(this.client.get<User[]>("/users"))).pipe(
 ## Node / scripts / CLIs
 
 ```ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 
 const api = createClient({
   baseUrl: process.env.API_URL,
@@ -440,7 +440,7 @@ Create the client **inside** the handler, not at module scope — module state i
 
 ```html
 <script type="module">
-  import { createClient } from "https://esm.sh/@mohammadreza-zr/api-client";
+  import { createClient } from "https://esm.sh/@mrzr/api-client";
 
   const api = createClient({ baseUrl: "https://api.example.com" });
   const { data } = await api.get("/health");

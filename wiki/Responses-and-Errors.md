@@ -83,7 +83,7 @@ If the body has a `data` key, `res.data` is that value, not the wrapper. `fullDa
 **Failed requests reject with an `ApiError`.**
 
 ```ts
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 
 try {
   const { data } = await api.get<User>("/users/1");

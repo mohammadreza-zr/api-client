@@ -12,13 +12,13 @@ import {
   MemoryStorage,
   WebStorage,
   CookieStorage,
-} from "@mohammadreza-zr/api-client";
+} from "@mrzr/api-client";
 
 import type {
   ApiClient, AuthMode, AuthState, ClientOptions, HttpMethod, IRes,
   ListResponse, LogEntry, Ordering, Params, RequestConfig,
   StorageKind, TokenExtractor, TokenPair, TokenStorage,
-} from "@mohammadreza-zr/api-client";
+} from "@mrzr/api-client";
 ```
 
 ---

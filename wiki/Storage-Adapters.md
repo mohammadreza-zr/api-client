@@ -171,7 +171,7 @@ createClient({
 ## Using the adapter classes directly
 
 ```ts
-import { MemoryStorage, WebStorage, CookieStorage } from "@mohammadreza-zr/api-client";
+import { MemoryStorage, WebStorage, CookieStorage } from "@mrzr/api-client";
 
 new MemoryStorage();
 new WebStorage("myapp.tokens", "local");    // or "session"
