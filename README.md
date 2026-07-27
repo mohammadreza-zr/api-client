@@ -15,7 +15,24 @@ npm install @mohammadreza-zr/api-client
 - **Drop-in for TanStack Query / SWR** — failures reject with a typed `ApiError`, or switch to a never-throwing envelope with one flag
 - **Real upload support** — `FormData`, `File`, `Blob`, typed arrays and streams, with token refresh handled mid-upload
 - **CSRF double-submit** built in, for cookie auth
-- **~13 KB** min+gzip, tree-shakeable, ESM + CJS + full types
+- **~10 KB** min+gzip, tree-shakeable, ESM + CJS + full types
+
+---
+
+## 📚 Documentation
+
+Full documentation lives in the **[Wiki](https://github.com/mohammadreza-zr/api-client/wiki)** — 25 pages covering every feature in depth.
+
+| | |
+|---|---|
+| **Start here** | [Installation](https://github.com/mohammadreza-zr/api-client/wiki/Installation) · [Quick Start](https://github.com/mohammadreza-zr/api-client/wiki/Quick-Start) · [Core Concepts](https://github.com/mohammadreza-zr/api-client/wiki/Core-Concepts) |
+| **Requests** | [Requests](https://github.com/mohammadreza-zr/api-client/wiki/Requests) · [Request Config](https://github.com/mohammadreza-zr/api-client/wiki/Request-Config) · [Responses & Errors](https://github.com/mohammadreza-zr/api-client/wiki/Responses-and-Errors) · [Uploads](https://github.com/mohammadreza-zr/api-client/wiki/Uploads-and-Binary-Bodies) |
+| **Auth** | [Authentication](https://github.com/mohammadreza-zr/api-client/wiki/Authentication) · [Token Refresh](https://github.com/mohammadreza-zr/api-client/wiki/Token-Refresh) · [Storage](https://github.com/mohammadreza-zr/api-client/wiki/Storage-Adapters) · [CSRF](https://github.com/mohammadreza-zr/api-client/wiki/CSRF-Protection) |
+| **Advanced** | [Worker Isolation](https://github.com/mohammadreza-zr/api-client/wiki/Web-Worker-Isolation) · [Multi-Tab Sync](https://github.com/mohammadreza-zr/api-client/wiki/Multi-Tab-Sync) · [Logging](https://github.com/mohammadreza-zr/api-client/wiki/Logging-and-Observability) · [Security Model](https://github.com/mohammadreza-zr/api-client/wiki/Security-Model) |
+| **Reference** | [Client Options](https://github.com/mohammadreza-zr/api-client/wiki/Client-Options) · [API Reference](https://github.com/mohammadreza-zr/api-client/wiki/API-Reference) · [TypeScript Types](https://github.com/mohammadreza-zr/api-client/wiki/TypeScript-Types) |
+| **Guides** | [Framework Recipes](https://github.com/mohammadreza-zr/api-client/wiki/Framework-Recipes) · [Cookbook](https://github.com/mohammadreza-zr/api-client/wiki/Cookbook) · [Migration](https://github.com/mohammadreza-zr/api-client/wiki/Migration-Guide) · [Troubleshooting](https://github.com/mohammadreza-zr/api-client/wiki/Troubleshooting) · [FAQ](https://github.com/mohammadreza-zr/api-client/wiki/FAQ) |
+
+The source for these pages is in [`wiki/`](./wiki) — edit there and run `./scripts/sync-wiki.sh` to publish.
 
 ---
 
