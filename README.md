@@ -525,7 +525,7 @@ try {
 
 ## Requirements
 
-Any runtime with `fetch` and `AbortController`: all modern browsers, Node 18+, Deno, Bun, Cloudflare Workers.
+Any runtime with `fetch` and `AbortController`: all modern browsers, Node 20+, Deno, Bun, Cloudflare Workers.
 
 ## License
 

@@ -18,7 +18,7 @@ Any runtime with `fetch` and `AbortController`:
 
 | Runtime | Minimum |
 |---|---|
-| Node.js | 18 (enforced via `engines`) |
+| Node.js | 20 (enforced via `engines`) |
 | Chrome / Edge | 80+ |
 | Firefox | 78+ |
 | Safari | 14+ |

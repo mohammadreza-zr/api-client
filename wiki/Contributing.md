@@ -151,7 +151,7 @@ Two workflows live in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | every push and pull request | lint, typecheck, build, then all four `verify/` suites on Node 18, 20 and 22 |
+| `ci.yml` | every push and pull request | lint, typecheck, build, then all four `verify/` suites on Node 20, 22 and 24 |
 | `release.yml` | pushing a `v*` tag | re-runs the full check matrix, then publishes to npm and opens a GitHub Release |
 
 A pull request cannot merge until `ci.yml` is green on every Node version in the matrix.
@@ -171,7 +171,7 @@ git push --follow-tags
 `release.yml` then takes over:
 
 1. Verifies the tag matches the `version` in `package.json` and fails fast if they disagree.
-2. Runs lint, typecheck, build and all four suites across Node 18, 20 and 22.
+2. Runs lint, typecheck, build and all four suites across Node 20, 22 and 24.
 3. Publishes to npm with `--provenance`, so the package carries a signed link back to the exact commit and workflow run that built it.
 4. Creates the GitHub Release with generated notes.
 
