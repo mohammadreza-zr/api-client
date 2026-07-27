@@ -32,8 +32,6 @@ Full documentation lives in the **[Wiki](https://github.com/mohammadreza-zr/api-
 | **Reference** | [Client Options](https://github.com/mohammadreza-zr/api-client/wiki/Client-Options) · [API Reference](https://github.com/mohammadreza-zr/api-client/wiki/API-Reference) · [TypeScript Types](https://github.com/mohammadreza-zr/api-client/wiki/TypeScript-Types) |
 | **Guides** | [Framework Recipes](https://github.com/mohammadreza-zr/api-client/wiki/Framework-Recipes) · [Cookbook](https://github.com/mohammadreza-zr/api-client/wiki/Cookbook) · [Migration](https://github.com/mohammadreza-zr/api-client/wiki/Migration-Guide) · [Troubleshooting](https://github.com/mohammadreza-zr/api-client/wiki/Troubleshooting) · [FAQ](https://github.com/mohammadreza-zr/api-client/wiki/FAQ) |
 
-The source for these pages is in [`wiki/`](./wiki) — edit there and run `./scripts/sync-wiki.sh` to publish.
-
 ---
 
 ## Quick start
