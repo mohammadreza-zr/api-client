@@ -67,7 +67,8 @@
   },
   "homepage": "https://github.com/mohammadreza-zr/api-client#readme",
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

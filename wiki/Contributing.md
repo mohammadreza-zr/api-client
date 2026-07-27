@@ -147,25 +147,50 @@ House style:
 
 ## CI
 
-`.github/ci.yml.example` holds the workflow. It isn't committed to `.github/workflows/` because the GitHub App in use lacks the `workflows` permission — rename it locally to enable:
+Two workflows live in `.github/workflows/`:
 
-```bash
-mkdir -p .github/workflows
-cp .github/ci.yml.example .github/workflows/ci.yml
-```
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `ci.yml` | every push and pull request | lint, typecheck, build, then all four `verify/` suites on Node 18, 20 and 22 |
+| `release.yml` | pushing a `v*` tag | re-runs the full check matrix, then publishes to npm and opens a GitHub Release |
+
+A pull request cannot merge until `ci.yml` is green on every Node version in the matrix.
 
 ---
 
 ## Releasing
 
+Releases are automated. Pushing a version tag is the whole process:
+
 ```bash
-npm run verify              # all suites green
-npm version patch|minor|major
-npm publish                 # prepublishOnly rebuilds automatically
+npm run verify                    # optional; CI runs it again anyway
+npm version patch|minor|major     # bumps package.json, commits, creates the vX.Y.Z tag
 git push --follow-tags
 ```
 
-Pre-publish checks worth running:
+`release.yml` then takes over:
+
+1. Verifies the tag matches the `version` in `package.json` and fails fast if they disagree.
+2. Runs lint, typecheck, build and all four suites across Node 18, 20 and 22.
+3. Publishes to npm with `--provenance`, so the package carries a signed link back to the exact commit and workflow run that built it.
+4. Creates the GitHub Release with generated notes.
+
+Authentication uses **npm trusted publishing (OIDC)** — there is no `NPM_TOKEN` secret in this repository, and there shouldn't be. The workflow requests a short-lived credential at publish time via `id-token: write`.
+
+### One-time npm setup
+
+On [npmjs.com](https://www.npmjs.com/package/@mrzr/api-client) → the package → **Settings** → **Trusted Publishers** → **GitHub Actions**:
+
+| Field | Value |
+|---|---|
+| Organization or user | `mohammadreza-zr` |
+| Repository | `api-client` |
+| Workflow filename | `release.yml` |
+| Environment | *(leave empty)* |
+
+All fields are case-sensitive, and the workflow field takes the bare filename — not the `.github/workflows/` path.
+
+### Pre-publish checks worth running
 
 ```bash
 npm pack --dry-run                          # inspect the tarball contents
@@ -174,17 +199,18 @@ npx @arethetypeswrong/cli --pack .          # verify type resolution in every mo
 
 `files` is restricted to `dist`, `README.md` and `LICENSE`, so sources, tests and the wiki stay out of the tarball.
 
+### If a publish fails
+
+- **`E404` on a scoped package, or `ENEEDAUTH`** — trusted publishing isn't configured yet, or a field doesn't match exactly. Re-check the table above. Note the workflow deliberately strips the placeholder `_authToken` line that `actions/setup-node` writes; without that step npm sees an empty token, assumes auth is already handled and never performs the OIDC exchange.
+- **`422 … Failed to validate repository information`** — provenance requires `repository.url` in `package.json` to match the repo it's published from. Don't change it.
+- **Tag/version mismatch** — the guard step caught a tag that doesn't match `package.json`. Delete the tag, fix the version, tag again.
+- **A version can't be republished.** npm rejects re-publishing the same version, so bump and tag afresh rather than retrying the run.
+
 ---
 
 ## Documentation
 
 The wiki lives in `wiki/` and is mirrored to the GitHub Wiki. Page filenames map to wiki page names with hyphens for spaces (`Token-Refresh.md` → *Token Refresh*), and `[[Wiki Link]]` syntax resolves automatically.
-
-Sync it:
-
-```bash
-./scripts/sync-wiki.sh
-```
 
 Keep `_Sidebar.md` in step when you add a page.
 
