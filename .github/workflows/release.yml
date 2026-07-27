@@ -1,0 +1,151 @@
+name: Release
+
+# Tag-driven releases:
+#
+#   npm version patch|minor|major
+#   git push --follow-tags
+#
+# Publishing uses npm trusted publishing (OIDC). There is deliberately no
+# NPM_TOKEN secret — `id-token: write` lets npm mint a short-lived credential
+# at publish time, and --provenance signs a link back to this exact run.
+on:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Existing tag to (re)publish, e.g. v1.0.1"
+                required: true
+                type: string
+
+permissions:
+    contents: read
+
+concurrency:
+    group: release-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    # Fail before any publishing side effect if the tag and package.json disagree.
+    guard:
+        name: guard
+        runs-on: ubuntu-latest
+        outputs:
+            version: ${{ steps.check.outputs.version }}
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  ref: ${{ inputs.tag || github.ref }}
+
+            - id: check
+              name: Tag must match package.json version
+              run: |
+                  set -euo pipefail
+                  raw="${{ inputs.tag || github.ref_name }}"
+                  tag_version="${raw#v}"
+                  pkg_version="$(node -p "require('./package.json').version")"
+
+                  if [ "$tag_version" != "$pkg_version" ]; then
+                    echo "::error::Tag $raw implies version $tag_version but package.json says $pkg_version."
+                    echo "::error::Fix the version (or the tag) so the two agree, then tag again."
+                    exit 1
+                  fi
+
+                  echo "version=$pkg_version" >> "$GITHUB_OUTPUT"
+                  echo "✓ Releasing v$pkg_version"
+
+    verify:
+        name: verify (node ${{ matrix.node }})
+        needs: guard
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: true
+            matrix:
+                node: [18, 20, 22]
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  ref: ${{ inputs.tag || github.ref }}
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ matrix.node }}
+                  cache: npm
+
+            - run: npm ci
+            - run: npm run lint
+            - run: npm run typecheck
+            - run: npm run build
+            - run: node verify/run.mjs
+            - run: node verify/worker.mjs
+            - run: node verify/audit.mjs
+            - run: node verify/features.mjs
+
+    publish:
+        name: publish to npm
+        needs: [guard, verify]
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write # create the GitHub Release
+            id-token: write # required for OIDC trusted publishing + provenance
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  ref: ${{ inputs.tag || github.ref }}
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+                  registry-url: https://registry.npmjs.org
+
+            # Runners can ship an npm too old to perform the OIDC token exchange,
+            # which surfaces as a misleading E404 on publish.
+            - name: Use an npm new enough for trusted publishing
+              run: npm install -g npm@latest
+
+            # actions/setup-node always writes `_authToken=${NODE_AUTH_TOKEN}` into
+            # .npmrc when registry-url is set. With no token secret that expands to an
+            # empty string, npm treats auth as "already configured" and never starts
+            # the OIDC exchange — failing with ENEEDAUTH/E404. Drop the line.
+            - name: Clear the placeholder auth line so OIDC is used
+              run: |
+                  npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+                  [ -f "$npmrc" ] && sed -i '/_authToken/d' "$npmrc"
+                  echo "--- effective .npmrc ---"
+                  cat "$npmrc" 2>/dev/null || echo "(none)"
+
+            - run: npm ci
+
+            # prepublishOnly rebuilds too, but doing it here surfaces build failures
+            # as their own step rather than buried in the publish log.
+            - run: npm run build
+
+            - name: Verify type resolution before publishing
+              run: npx --yes @arethetypeswrong/cli --pack .
+
+            # No NODE_AUTH_TOKEN: setting one makes npm take the legacy token path
+            # instead of OIDC.
+            - name: Publish
+              run: npm publish --provenance --access public
+
+            - name: Create GitHub Release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                  gh release create "v${{ needs.guard.outputs.version }}" \
+                    --title "v${{ needs.guard.outputs.version }}" \
+                    --generate-notes \
+                    --verify-tag
+
+            - name: Summary
+              run: |
+                  {
+                    echo "### Published \`@mrzr/api-client@${{ needs.guard.outputs.version }}\` 🎉"
+                    echo
+                    echo "- npm: https://www.npmjs.com/package/@mrzr/api-client/v/${{ needs.guard.outputs.version }}"
+                    echo "- Provenance: signed via OIDC trusted publishing"
+                    echo
+                    echo "Verify with \`npm audit signatures\` after installing."
+                  } >> "$GITHUB_STEP_SUMMARY"

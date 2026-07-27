@@ -1,0 +1,65 @@
+name: CI
+
+on:
+    push:
+        branches: ["**"]
+    pull_request:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    verify:
+        name: verify (node ${{ matrix.node }})
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                node: [18, 20, 22]
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ matrix.node }}
+                  cache: npm
+
+            - run: npm ci
+
+            - run: npm run lint
+
+            - run: npm run typecheck
+
+            - run: npm run build
+
+            # The four suites, run against real node:http servers — not mocked fetch.
+            - run: node verify/run.mjs
+            - run: node verify/worker.mjs
+            - run: node verify/audit.mjs
+            - run: node verify/features.mjs
+
+    package:
+        name: package
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: npm
+
+            - run: npm ci
+
+            - run: npm run build
+
+            # Catches a broken "exports" map or a missing .d.cts before it reaches npm.
+            - name: Check type resolution in every module mode
+              run: npx --yes @arethetypeswrong/cli --pack .
+
+            - name: Inspect tarball contents
+              run: npm pack --dry-run
