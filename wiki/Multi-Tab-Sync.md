@@ -9,6 +9,12 @@ createClient({ multiTab: false }); // opt out
 
 The channel name is `${storageKey}.auth`, i.e. `apiclient.auth` by default.
 
+Sync runs from wherever the client runs — including inside the Web Worker, which has its own `BroadcastChannel`.
+
+> Fixed in v1.0.2: the runtime check treated any scope without `window` as the server, and a worker has no `window`. So in the default worker mode the channel was never opened and **cross-tab sync silently did nothing**. Tabs only converged on the next 401.
+
+Sync also relies on tabs sharing storage, so pair it with a persistent kind — with the default `"memory"` each tab keeps its own tokens and only `logout` propagates.
+
 ---
 
 ## What it solves

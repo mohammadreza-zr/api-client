@@ -85,10 +85,15 @@ class FakeWorker {
       Uint8Array,
       atob: globalThis.atob,
       btoa: globalThis.btoa,
+      // A real DedicatedWorkerGlobalScope exposes these; without them the
+      // library cannot tell a worker apart from an SSR/Node scope and
+      // silently disables cross-tab sync.
+      importScripts() {},
+      WorkerGlobalScope: function WorkerGlobalScope() {},
+      BroadcastChannel: globalThis.BroadcastChannel,
     };
     scope.self = scope;
     scope.globalThis = scope;
-    // No BroadcastChannel in this harness → single-tab behaviour.
 
     this._ctx = vm.createContext(scope);
     vm.runInContext(WORKER_SOURCE, this._ctx, { filename: "worker.js" });

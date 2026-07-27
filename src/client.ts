@@ -7,7 +7,7 @@ import type {
 } from "./types";
 import { ApiError } from "./types";
 import { CoreClient } from "./internal/core-client";
-import { hasWorker, isServer } from "./internal/env";
+import { hasWorker, isServer, isWorkerScope } from "./internal/env";
 import { WorkerHost } from "./worker/worker-host";
 import { WORKER_SOURCE } from "./worker/worker-source";
 
@@ -88,6 +88,8 @@ export function createClient(options: ClientOptions = {}): ApiClient {
   const canUseWorker =
     wantsWorker &&
     !isServer() &&
+    // Already inside a worker: run inline rather than nesting another one.
+    !isWorkerScope() &&
     hasWorker() &&
     WORKER_SOURCE.length > 0 &&
     // A custom storage object stays on the main thread and is served to the

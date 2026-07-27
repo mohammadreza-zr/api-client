@@ -16,7 +16,7 @@
  */
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
-import { start } from "./server.mjs";
+import { start, state as serverState } from "./server.mjs";
 
 const BASE = "http://localhost:4603";
 let pass = 0,
@@ -99,6 +99,12 @@ class FakeWorker {
       Uint8Array,
       atob: globalThis.atob,
       btoa: globalThis.btoa,
+      // A real DedicatedWorkerGlobalScope exposes these; without them the
+      // library cannot tell a worker apart from an SSR/Node scope and
+      // silently disables cross-tab sync.
+      importScripts() {},
+      WorkerGlobalScope: function WorkerGlobalScope() {},
+      BroadcastChannel: globalThis.BroadcastChannel,
     };
     scope.self = scope;
     scope.globalThis = scope;
@@ -413,6 +419,67 @@ try {
     check("memory mode: no JWT ever crosses to the main thread", !traffic.includes("eyJ"), "a token was posted out");
     check("memory mode: no storage bridge traffic at all", !traffic.includes('"kind":"storage"'));
     check("auth state carries no tokens", !JSON.stringify(state).includes("eyJ"));
+  }
+
+  console.log("\ncross-tab sync works in worker mode");
+  {
+    // A worker has no `window`, so a naive `typeof window === "undefined"`
+    // check mistakes it for SSR and never opens the BroadcastChannel. That
+    // silently disabled multi-tab sync in the default (worker) mode.
+    const probe = new FakeWorker();
+    const looksLikeWorker =
+      typeof probe._scope.importScripts === "function" &&
+      typeof probe._scope.window === "undefined";
+    probe.terminate();
+    check("worker scope has importScripts but no window", looksLikeWorker);
+
+    reset();
+    const tab1 = make({ storage: "local", multiTab: true });
+    const tab2 = make({ storage: "local", multiTab: true });
+    check("both tabs run in worker mode", tab1.isWorker && tab2.isWorker);
+    await new Promise((r) => setTimeout(r, 60));
+
+    await tab1.login({ password: "good" });
+    await new Promise((r) => setTimeout(r, 250));
+    check(
+      "tab2 sees the login from tab1 (was: never synced in worker mode)",
+      (await tab2.getAuthState()).isAuthenticated === true,
+    );
+
+    await tab1.logout();
+    await new Promise((r) => setTimeout(r, 250));
+    check("tab2 sees the logout from tab1", (await tab2.getAuthState()).isAuthenticated === false);
+    check("logout cleared the shared record", written.local().length === 0);
+
+    tab1.destroy();
+    tab2.destroy();
+  }
+
+  console.log("\nrefresh-token rotation is persisted");
+  {
+    reset();
+    const api = make({ storage: "local" });
+    await api.login({ password: "good" });
+    // The server mints a fresh token on refresh; assert storage tracks it.
+    // (Comparing before/after strings is unreliable: two JWTs minted in the
+    // same second are byte-identical.)
+    const rotated = await api.refresh();
+    check("refresh succeeded", rotated !== null);
+
+    const stored = JSON.parse(local.get("apiclient.tokens")).accessToken;
+    check(
+      "storage holds the server's current access token after refresh",
+      stored === serverState.validAccess,
+      `stored=${String(stored).slice(-12)} server=${String(serverState.validAccess).slice(-12)}`,
+    );
+    api.destroy();
+
+    // The rotated token must be the one a reload picks up.
+    const reloaded = make({ storage: "local" });
+    check("reload uses the rotated token", (await reloaded.getAuthState()).isAuthenticated === true);
+    const res = await reloaded.get("/protected");
+    check("rotated token authorizes a request after reload", res.status === true);
+    reloaded.destroy();
   }
 
   console.log("\ncookie authMode keeps tokens server-side");

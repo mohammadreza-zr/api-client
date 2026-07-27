@@ -185,6 +185,17 @@ For SSR that needs the token on the server too, use `authMode: "cookie"` with ht
 
 ---
 
+### Logging out in one tab doesn't affect the others
+
+Check, in order:
+
+1. `multiTab: false` in your options.
+2. `storage: "memory"` (the default) — tabs share no storage, so a login in tab A can't be adopted by tab B. Logout still propagates. Use `"local"` or `"cookie"` for full sync.
+3. Different **origins** or different `storageKey` values — neither shares a channel.
+4. **v1.0.1 and earlier:** cross-tab sync was silently dead in worker mode (the default), because the worker scope has no `window` and was misdetected as SSR. Upgrade to v1.0.2+.
+
+---
+
 ### `api.isWorker` is `false` in the browser
 
 Check, in order:

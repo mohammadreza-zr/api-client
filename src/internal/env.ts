@@ -1,6 +1,29 @@
 /** Runtime capability detection. No bundler-specific globals leak out of here. */
 
-export const isServer = (): boolean => typeof window === "undefined";
+/**
+ * True inside a Web Worker (dedicated or shared).
+ *
+ * A worker has no `window`, so a bare `typeof window === "undefined"` check
+ * mistakes it for the server. `importScripts` is the reliable dedicated-worker
+ * marker; the constructor names cover the rest.
+ */
+export const isWorkerScope = (): boolean => {
+  try {
+    if (typeof importScripts === "function") return true;
+    const scope = globalThis as { WorkerGlobalScope?: unknown; self?: unknown };
+    return typeof scope.WorkerGlobalScope !== "undefined" && scope.self === globalThis;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * True only in a non-browser runtime (Node, Bun, SSR) — NOT in a worker.
+ *
+ * Workers legitimately have `BroadcastChannel` and must take part in cross-tab
+ * sync; treating them as "server" silently disabled it in worker mode.
+ */
+export const isServer = (): boolean => typeof window === "undefined" && !isWorkerScope();
 
 export const hasWorker = (): boolean =>
   typeof Worker !== "undefined" && typeof Blob !== "undefined" && typeof URL?.createObjectURL === "function";
