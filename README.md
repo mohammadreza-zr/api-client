@@ -1,11 +1,11 @@
-# @mohammadreza-zr/api-client
+# @mrzr/api-client
 
 A typed REST client built on `fetch` with **zero runtime dependencies**.
 
 Automatic token refresh, Web Worker isolation so tokens never touch the main thread, and cross-tab auth sync — in one `createClient()` call that works the same everywhere.
 
 ```bash
-npm install @mohammadreza-zr/api-client
+npm install @mrzr/api-client
 ```
 
 - **Zero dependencies** — nothing but the platform `fetch`
@@ -15,7 +15,24 @@ npm install @mohammadreza-zr/api-client
 - **Drop-in for TanStack Query / SWR** — failures reject with a typed `ApiError`, or switch to a never-throwing envelope with one flag
 - **Real upload support** — `FormData`, `File`, `Blob`, typed arrays and streams, with token refresh handled mid-upload
 - **CSRF double-submit** built in, for cookie auth
-- **~13 KB** min+gzip, tree-shakeable, ESM + CJS + full types
+- **~10 KB** min+gzip, tree-shakeable, ESM + CJS + full types
+
+---
+
+## 📚 Documentation
+
+Full documentation lives in the **[Wiki](https://github.com/mohammadreza-zr/api-client/wiki)** — 25 pages covering every feature in depth.
+
+| | |
+|---|---|
+| **Start here** | [Installation](https://github.com/mohammadreza-zr/api-client/wiki/Installation) · [Quick Start](https://github.com/mohammadreza-zr/api-client/wiki/Quick-Start) · [Core Concepts](https://github.com/mohammadreza-zr/api-client/wiki/Core-Concepts) |
+| **Requests** | [Requests](https://github.com/mohammadreza-zr/api-client/wiki/Requests) · [Request Config](https://github.com/mohammadreza-zr/api-client/wiki/Request-Config) · [Responses & Errors](https://github.com/mohammadreza-zr/api-client/wiki/Responses-and-Errors) · [Uploads](https://github.com/mohammadreza-zr/api-client/wiki/Uploads-and-Binary-Bodies) |
+| **Auth** | [Authentication](https://github.com/mohammadreza-zr/api-client/wiki/Authentication) · [Token Refresh](https://github.com/mohammadreza-zr/api-client/wiki/Token-Refresh) · [Storage](https://github.com/mohammadreza-zr/api-client/wiki/Storage-Adapters) · [CSRF](https://github.com/mohammadreza-zr/api-client/wiki/CSRF-Protection) |
+| **Advanced** | [Worker Isolation](https://github.com/mohammadreza-zr/api-client/wiki/Web-Worker-Isolation) · [Multi-Tab Sync](https://github.com/mohammadreza-zr/api-client/wiki/Multi-Tab-Sync) · [Logging](https://github.com/mohammadreza-zr/api-client/wiki/Logging-and-Observability) · [Security Model](https://github.com/mohammadreza-zr/api-client/wiki/Security-Model) |
+| **Reference** | [Client Options](https://github.com/mohammadreza-zr/api-client/wiki/Client-Options) · [API Reference](https://github.com/mohammadreza-zr/api-client/wiki/API-Reference) · [TypeScript Types](https://github.com/mohammadreza-zr/api-client/wiki/TypeScript-Types) |
+| **Guides** | [Framework Recipes](https://github.com/mohammadreza-zr/api-client/wiki/Framework-Recipes) · [Cookbook](https://github.com/mohammadreza-zr/api-client/wiki/Cookbook) · [Migration](https://github.com/mohammadreza-zr/api-client/wiki/Migration-Guide) · [Troubleshooting](https://github.com/mohammadreza-zr/api-client/wiki/Troubleshooting) · [FAQ](https://github.com/mohammadreza-zr/api-client/wiki/FAQ) |
+
+The source for these pages is in [`wiki/`](./wiki) — edit there and run `./scripts/sync-wiki.sh` to publish.
 
 ---
 
@@ -23,7 +40,7 @@ npm install @mohammadreza-zr/api-client
 
 ```ts
 // lib/api.ts
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 
 export const api = createClient({
   baseUrl: "https://api.example.com",
@@ -32,7 +49,7 @@ export const api = createClient({
 
 ```ts
 import { api } from "./lib/api";
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 
 try {
   const { data } = await api.get<User[]>("/users");
@@ -51,7 +68,7 @@ That's it. Worker isolation, refresh and tab sync are on by default and degrade 
 **Failed requests reject with an `ApiError`.** This is the default because it is what every data-fetching library expects — TanStack Query, SWR and Vue Query all detect failure through a rejected promise, and it makes `await` behave the way you'd assume.
 
 ```ts
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 
 try {
   const { data } = await api.get<User>("/users/1");
@@ -370,7 +387,7 @@ Works out of the box — failures reject, which is exactly what the library expe
 
 ```tsx
 import { useQuery } from "@tanstack/react-query";
-import { ApiError } from "@mohammadreza-zr/api-client";
+import { ApiError } from "@mrzr/api-client";
 import { api } from "@/lib/api";
 
 export const userKeys = {
@@ -414,7 +431,7 @@ Because the client rejects on failure, `error` is a real `ApiError` and SWR's bu
 
 ```ts
 // Server component / route handler — worker is skipped automatically
-import { createClient } from "@mohammadreza-zr/api-client";
+import { createClient } from "@mrzr/api-client";
 import { cookies } from "next/headers";
 
 export async function getUsers() {
@@ -452,7 +469,7 @@ Prefer no try/catch in components? Create the client with `throwError: false` an
 
 ```html
 <script type="module">
-  import { createClient } from "https://esm.sh/@mohammadreza-zr/api-client";
+  import { createClient } from "https://esm.sh/@mrzr/api-client";
   const api = createClient({ baseUrl: "https://api.example.com" });
   console.log((await api.get("/health")).data);
 </script>

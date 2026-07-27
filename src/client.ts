@@ -76,7 +76,7 @@ type Implementation = Pick<
  * implementation runs inline.
  *
  * ```ts
- * import { createClient } from "@mohammadreza-zr/api-client";
+ * import { createClient } from "@mrzr/api-client";
  *
  * export const api = createClient({ baseUrl: "https://api.example.com" });
  *

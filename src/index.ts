@@ -1,5 +1,5 @@
 /**
- * @mohammadreza-zr/api-client
+ * @mrzr/api-client
  *
  * A dependency-free, typed REST client with automatic token refresh,
  * Web Worker isolation and cross-tab auth sync. Works in every JS runtime.
