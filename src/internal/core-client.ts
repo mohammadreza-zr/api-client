@@ -103,8 +103,18 @@ export class CoreClient {
     }
 
     if (msg.type === "refreshed" || msg.type === "login") {
-      // Another tab rotated the tokens. In cookie mode the browser already has
-      // the new cookie; in header mode we re-read the shared storage.
+      /*
+       * Cookie mode: there is no shared storage to re-read — `hydrate()` is a
+       * no-op without an adapter — but the httpOnly cookie is origin-scoped,
+       * so the browser has already given this tab the very same session. The
+       * sibling's success is therefore proof that we are signed in too.
+       */
+      if (this.opts.authMode === "cookie") {
+        this.auth.markSession(true);
+        return;
+      }
+
+      // Header mode: another tab rotated the tokens into shared storage.
       void this.auth.hydrate().then(() => this.auth.emit());
     }
   }

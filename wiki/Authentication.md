@@ -232,6 +232,8 @@ await api.restoreSession();
 
 In header mode `restoreSession()` makes no request — the stored token already answers the question — so it is safe to call unconditionally.
 
+Multi-tab sync works in cookie mode too: the cookie is shared across tabs by the browser, so a login, refresh or logout in one tab updates the others. See [[Multi-Tab Sync]].
+
 > Before v1.0.2 `isAuthenticated` was derived purely from a readable access token, so in cookie mode it was **permanently `false`**, even immediately after a successful login.
 
 ### `onAuthFailure`

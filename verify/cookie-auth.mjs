@@ -339,6 +339,43 @@ try {
     }
   }
 
+  console.log("\nmulti-tab sync works in cookie mode");
+  {
+    /*
+     * Cookie mode has no shared storage to re-read, so the generic
+     * "another tab logged in -> hydrate()" path was a no-op: logout
+     * propagated but login did not. The httpOnly cookie is origin-scoped,
+     * so a sibling's successful login means this tab holds it too.
+     */
+    jar = "";
+    sessions = new Set();
+
+    const tab1 = make(true, { multiTab: true });
+    const tab2 = make(true, { multiTab: true });
+    await new Promise((r) => setTimeout(r, 80));
+    check("both tabs in worker mode", tab1.isWorker && tab2.isWorker);
+
+    await tab1.login({ email: "test@example.com", password: "password" });
+    await new Promise((r) => setTimeout(r, 300));
+
+    check("tab1 is authenticated", (await tab1.getAuthState()).isAuthenticated === true);
+    check(
+      "tab2 sees the login (was: only logout propagated in cookie mode)",
+      (await tab2.getAuthState()).isAuthenticated === true,
+    );
+
+    // The shared cookie must genuinely authorize tab2, not just flip a flag.
+    const probe = await tab2.get("/api/auth/me");
+    check("tab2 can actually call the API with the shared cookie", probe.status === true);
+
+    await tab1.logout();
+    await new Promise((r) => setTimeout(r, 300));
+    check("tab2 sees the logout", (await tab2.getAuthState()).isAuthenticated === false);
+
+    tab1.destroy();
+    tab2.destroy();
+  }
+
   console.log("\nrelative URLs need no baseUrl workaround in worker mode");
   {
     /*
