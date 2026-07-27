@@ -38,7 +38,9 @@ export type HostMessage =
   | { kind: "setTokens"; id: number; tokens: TokenPair }
   | { kind: "authState"; id: number }
   | { kind: "refresh"; id: number }
-  | { kind: "destroy" };
+  | { kind: "destroy" }
+  /** Reply to a worker-initiated storage read/write. */
+  | { kind: "storageResult"; id: number; tokens: TokenPair | null };
 
 export type WorkerMessage =
   | { kind: "ready" }
@@ -49,4 +51,13 @@ export type WorkerMessage =
   | { kind: "failure"; id: number; message: string }
   | { kind: "authChanged"; state: AuthState }
   | { kind: "authFailure" }
-  | { kind: "log"; entry: unknown };
+  | { kind: "log"; entry: unknown }
+  /**
+   * Persistence request, proxied to the main thread.
+   *
+   * `localStorage`, `sessionStorage` and `document.cookie` are Window APIs and
+   * simply do not exist in a worker scope, so the worker cannot persist tokens
+   * itself. It asks the host to do it instead. Only reaches the host for
+   * explicitly persistent adapters — `"memory"` never leaves the worker.
+   */
+  | { kind: "storage"; id: number; op: "get" | "set" | "clear"; tokens?: TokenPair };

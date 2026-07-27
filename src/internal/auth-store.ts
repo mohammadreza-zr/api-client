@@ -16,6 +16,8 @@ export class AuthStore {
 
   private inFlight: Promise<string | null> | null = null;
   private listeners = new Set<(state: AuthState) => void>();
+  /** The most recent persist, so callers can await durability. */
+  private pendingWrite: Promise<void> = Promise.resolve();
 
   constructor(private storage?: TokenStorage) {}
 
@@ -72,8 +74,19 @@ export class AuthStore {
       getTokenExpiry(tokens.accessToken ?? this.access) ??
       this.expiry;
 
-    if (persist) void this.persist();
+    if (persist) this.pendingWrite = this.persist();
     this.emit();
+  }
+
+  /**
+   * Resolves once the last write has actually landed.
+   *
+   * Persisting is fire-and-forget so requests are never blocked on storage,
+   * but `setTokens` and `login` must not resolve before the tokens are durable
+   * — otherwise an immediate reload races the write and loses the session.
+   */
+  async flush(): Promise<void> {
+    await this.pendingWrite;
   }
 
   clear(persist = true): void {
@@ -82,7 +95,7 @@ export class AuthStore {
     this.expiry = null;
     this.user = undefined;
     if (persist && this.storage) {
-      void Promise.resolve(this.storage.clear()).catch(() => {});
+      this.pendingWrite = Promise.resolve(this.storage.clear()).catch(() => {});
     }
     this.emit();
   }

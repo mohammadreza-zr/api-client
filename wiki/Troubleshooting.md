@@ -133,13 +133,64 @@ Pending promises reject with this when `destroy()` is called. Make sure you aren
 
 ## Behaviour problems
 
+### User is logged out after every page reload
+
+First, check whether the tokens are being written at all — look for `apiclient.tokens` in DevTools → Application → Local Storage (or Cookies).
+
+**If nothing is stored:**
+
+- `storage` defaults to `"memory"`, which is *designed* not to survive a reload. Set it explicitly:
+
+  ```ts
+  createClient({ storage: "local" });
+  ```
+
+- On **v1.0.1 and earlier this was a bug**: in worker mode (the default) `"local"`, `"session"` and `"cookie"` all silently discarded every write, because the worker built the adapter in a scope with no `localStorage`. Upgrade to v1.0.2+, where the main thread owns the adapter.
+
+**If the tokens are stored but you're still logged out:**
+
+- Your server may not return them in a shape the default extractor recognises. Supply `extractTokens` — but note that opts out of worker mode.
+- Check `storageKey`: two clients with different keys don't share a session.
+- In `authMode: "cookie"`, nothing is stored locally by design; the browser holds httpOnly cookies and the session depends on those, not on `storage`.
+
+Confirm the round trip:
+
+```ts
+await api.login({ email, password });
+console.log(await api.getAuthState()); // isAuthenticated: true
+// reload, then:
+console.log(await api.getAuthState()); // should still be true
+```
+
+---
+
+### Nuxt: tokens don't persist
+
+`createClient` runs on both server and client in Nuxt. On the server there is no `localStorage`, so create the client in a **client-side plugin** — or guard on `import.meta.client` — and keep one shared instance rather than one per component:
+
+```ts
+// plugins/api.client.ts
+export default defineNuxtPlugin(() => {
+  const api = createClient({
+    baseUrl: useRuntimeConfig().public.apiUrl,
+    storage: "local",
+  });
+  return { provide: { api } };
+});
+```
+
+Creating a fresh client on every render also loses the session, because each one hydrates independently.
+
+For SSR that needs the token on the server too, use `authMode: "cookie"` with httpOnly cookies, or the `"cookie"` adapter so the server can read the record.
+
+---
+
 ### `api.isWorker` is `false` in the browser
 
 Check, in order:
 
 1. `worker: false` in your options.
-2. A **custom storage object** — `storage: { get, set, clear }` disables the worker.
-3. `extractTokens` or `buildRefreshBody` supplied — same.
+2. `extractTokens` or `buildRefreshBody` supplied — functions can't cross the boundary.
 4. CSP blocking `blob:` — add `worker-src 'self' blob:`.
 5. SSR — expected; `window` is undefined.
 

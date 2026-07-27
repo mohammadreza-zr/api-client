@@ -5,9 +5,11 @@ import type {
   IRes,
   RequestConfig,
   TokenPair,
+  TokenStorage,
 } from "../types";
 import type { HostMessage, SerializableConfig, SerializableOptions, WorkerMessage } from "./protocol";
 import { detectBaseUrl } from "../internal/env";
+import { resolveStorage } from "../internal/storage";
 import { WORKER_SOURCE } from "./worker-source";
 
 /**
@@ -32,6 +34,8 @@ export class WorkerHost {
   private xsrfCookieName?: string;
   private xsrfHeaderName: string;
   private csrfProvider?: () => string | undefined;
+  /** Main-thread storage the worker persists through. `null` for memory. */
+  private storage: TokenStorage | null = null;
 
   constructor(options: ClientOptions) {
     this.hooks = {
@@ -46,6 +50,19 @@ export class WorkerHost {
     this.xsrfCookieName = options.xsrfCookieName;
     this.xsrfHeaderName = options.xsrfHeaderName ?? "X-CSRF-Token";
     this.csrfProvider = options.getCsrfToken;
+
+    /*
+     * Own the storage adapter here, on the main thread.
+     *
+     * `localStorage` / `sessionStorage` / `document.cookie` are Window APIs
+     * that do not exist inside a worker, so a worker-side adapter silently
+     * dropped every write and sessions never survived a reload. The worker
+     * asks us to persist instead. A caller-supplied adapter object also works
+     * this way — it cannot be cloned across the boundary either.
+     */
+    const kind = options.storage ?? "memory";
+    this.storage =
+      kind === "memory" ? null : resolveStorage(kind, options.storageKey ?? "apiclient");
 
     const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
     this.objectUrl = URL.createObjectURL(blob);
@@ -123,6 +140,42 @@ export class WorkerHost {
         if (this.hooks.onLog) this.hooks.onLog(msg.entry as never);
         else console.info("[api-client]", msg.entry);
         break;
+
+      case "storage":
+        void this.serveStorage(msg.id, msg.op, msg.tokens);
+        break;
+    }
+  }
+
+  /**
+   * Runs one storage operation for the worker and posts the answer back.
+   * Always replies, even on failure, so the worker never waits on a dead call.
+   */
+  private async serveStorage(
+    id: number,
+    op: "get" | "set" | "clear",
+    tokens?: TokenPair,
+  ): Promise<void> {
+    let result: TokenPair | null = null;
+    try {
+      if (!this.storage) {
+        result = null;
+      } else if (op === "get") {
+        result = (await this.storage.get()) ?? null;
+      } else if (op === "set" && tokens) {
+        await this.storage.set(tokens);
+      } else if (op === "clear") {
+        await this.storage.clear();
+      }
+    } catch {
+      // Quota, Safari private mode, disabled cookies — never fatal.
+      result = null;
+    }
+
+    try {
+      this.dispatch({ kind: "storageResult", id, tokens: result });
+    } catch {
+      /* worker already terminated */
     }
   }
 
@@ -332,6 +385,12 @@ function toSerializableOptions(options: ClientOptions): SerializableOptions {
   return {
     ...rest,
     /*
+     * Forward only the *kind*, so the worker knows whether to persist at all.
+     * A custom adapter object is served from the host, and is reported to the
+     * worker as "local" purely so it opts into the storage bridge.
+     */
+    storage: typeof storage === "object" ? "local" : storage,
+    /*
      * Resolve the base URL here, on the main thread.
      *
      * The worker runs from a Blob, so the bundler never touched its source and
@@ -340,8 +399,6 @@ function toSerializableOptions(options: ClientOptions): SerializableOptions {
      * origin instead of the API.
      */
     baseUrl: options.baseUrl ?? detectBaseUrl() ?? "",
-    // A custom storage object cannot cross the boundary; fall back to memory.
-    storage: typeof storage === "object" ? undefined : storage,
   };
 }
 

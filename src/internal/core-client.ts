@@ -266,6 +266,9 @@ export class CoreClient {
       if (tokens) this.auth.apply(tokens);
       const user = extractUser(result.data);
       if (user !== undefined) this.auth.setUser(user);
+      // A successful login is usually followed by a redirect; make sure the
+      // tokens are durable before we hand control back.
+      await this.auth.flush();
       this.tabs.post({ type: "login", tabId: this.tabs.tabId, expiresAt: this.auth.expiresAt });
 
       // Honour the caller's unwrapping preference for the returned value.
@@ -294,6 +297,8 @@ export class CoreClient {
     }
 
     this.auth.clear();
+    // Likewise on the way out: the record must be gone before any redirect.
+    await this.auth.flush();
     this.tabs.post({ type: "logout", tabId: this.tabs.tabId });
     return result;
   }
@@ -301,6 +306,8 @@ export class CoreClient {
   async setTokens(tokens: TokenPair): Promise<void> {
     await this.hydrated;
     this.auth.apply(tokens);
+    // Await durability: callers seed tokens then often navigate immediately.
+    await this.auth.flush();
     this.tabs.post({ type: "login", tabId: this.tabs.tabId, expiresAt: this.auth.expiresAt });
   }
 

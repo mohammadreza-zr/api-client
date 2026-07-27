@@ -90,8 +90,8 @@ export function createClient(options: ClientOptions = {}): ApiClient {
     !isServer() &&
     hasWorker() &&
     WORKER_SOURCE.length > 0 &&
-    // A custom storage object can't be cloned into a worker.
-    typeof options.storage !== "object" &&
+    // A custom storage object stays on the main thread and is served to the
+    // worker over the storage bridge, so it no longer forces inline mode.
     !options.extractTokens &&
     !options.buildRefreshBody;
 

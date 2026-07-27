@@ -371,7 +371,8 @@ createClient({
     set: (tokens) => myStore.write(JSON.stringify(tokens)),
     clear: () => myStore.remove(),
   },
-  worker: false, // custom adapters can't cross the worker boundary
+  // Worker mode is preserved: the adapter runs on the main thread and the
+  // worker persists through it.
 });
 ```
 

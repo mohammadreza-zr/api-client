@@ -22,6 +22,10 @@ createClient({ storage: "cookie" });
 | `"local"` | ✅ | ✅ | ✅ | High |
 | `"cookie"` | ✅ (7 days) | ✅ | ✅ | High + sent on every request |
 
+> **How persistence works in worker mode.** `localStorage`, `sessionStorage` and `document.cookie` are Window APIs with no worker equivalent, so the worker cannot write them itself. The adapter therefore lives on the **main thread**, and the worker persists through it over an internal bridge.
+>
+> This is why choosing a persistent kind is also a security decision: the tokens necessarily pass through the main thread to be written somewhere page scripts can already read. `"memory"` keeps its bridge switched off entirely, so tokens never leave the worker — that guarantee is unchanged, and covered by `verify/storage.mjs`.
+
 Keys are namespaced by `storageKey` (default `"apiclient"`), so the token record lives at `apiclient.tokens` and the cross-tab channel at `apiclient.auth`.
 
 ```ts
@@ -89,11 +93,12 @@ createClient({
     set: (tokens) => myStore.write(JSON.stringify(tokens)),
     clear: () => myStore.remove(),
   },
-  worker: false, // required — see below
 });
 ```
 
-> ⚠️ A custom storage **object** cannot be structured-cloned into a worker, so supplying one **automatically disables worker mode**. Pass `worker: false` explicitly to make that visible in your code. Storage *strings* (`"local"`, etc.) are cloneable and keep worker mode.
+> A custom adapter **keeps worker mode**. The object itself stays on the main thread — it is never cloned into the worker — and the worker calls it over the storage bridge. Your `get`/`set`/`clear` therefore run on the main thread, and may be sync or async.
+>
+> (Before v1.0.2 an adapter object silently forced inline mode, because it couldn't be structured-cloned.)
 
 Errors thrown from an adapter are swallowed — corrupt or unavailable storage is never fatal.
 

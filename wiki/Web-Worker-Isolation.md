@@ -61,8 +61,7 @@ Worker mode is skipped — silently, falling back to the identical main-thread i
 | `worker: false` | You opted out |
 | `typeof window === "undefined"` | SSR / Node: no `Worker` |
 | `Worker`, `Blob` or `URL.createObjectURL` missing | Unsupported runtime |
-| `storage` is an **object** (a custom adapter) | Functions can't be structured-cloned |
-| `extractTokens` supplied | Same |
+| `extractTokens` supplied | Functions can't be structured-cloned |
 | `buildRefreshBody` supplied | Same |
 | Worker construction throws (CSP blocks `blob:`) | Caught, falls back |
 
@@ -112,9 +111,15 @@ A stream cannot be structured-cloned. Rather than an opaque `DataCloneError` fro
 
 Workers have no `document`. The host reads `document.cookie` (or calls your `getCsrfToken`) and mirrors the value into the request headers before posting. See [[CSRF Protection]].
 
-### 4. Custom storage objects aren't available
+### 4. Storage is owned by the host
 
-Storage **strings** (`"local"`, `"session"`, `"cookie"`, `"memory"`) work — the worker constructs the adapter itself, and `localStorage` is not accessible from a worker, so `"local"`/`"session"` degrade to memory inside it. If you need real persistence in worker mode, use `"cookie"` (readable via the host) or accept the reload cost of `"memory"`.
+`localStorage`, `sessionStorage` and `document.cookie` are Window APIs that simply don't exist in a worker. So the adapter — whether a string kind or your own object — is built on the **main thread**, and the worker persists through it over an internal `storage` message.
+
+Every kind therefore behaves the same in both modes, and sessions survive a reload.
+
+`"memory"` is the exception: it stays inside the worker and the bridge is never used, so tokens never reach the main thread at all. That's what makes it the safest option, and it's why it remains the default.
+
+> Before v1.0.2 the worker built the adapter itself. `localStorage` doesn't exist there, so `"local"`, `"session"` and `"cookie"` silently discarded every write and users were logged out on each reload.
 
 ---
 

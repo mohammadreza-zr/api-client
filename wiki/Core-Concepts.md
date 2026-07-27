@@ -27,7 +27,7 @@ createClient()  ───▶ │ Can I use a Worker?         │
 
 | Mode | When | Tokens live in |
 |---|---|---|
-| **Worker** | Browser, `Worker`/`Blob`/`createObjectURL` available, no custom `storage` object / `extractTokens` / `buildRefreshBody`, CSP permits blob workers | The worker's closure — unreachable from page scripts |
+| **Worker** | Browser, `Worker`/`Blob`/`createObjectURL` available, no `extractTokens` / `buildRefreshBody`, CSP permits blob workers | The worker's closure — unreachable from page scripts |
 | **Main thread** | Worker unavailable or opted out | A closure on the main thread |
 | **Server** | `typeof window === "undefined"` | A closure in the request scope |
 
