@@ -23,7 +23,7 @@ const { data } = await api.get<User[]>("/users");
 | | |
 |---|---|
 | **Zero dependencies** | Nothing but the platform `fetch`. No `axios`, no `qs`, no polyfills. |
-| **Runs anywhere** | React, Vue, Svelte, Angular, Next.js, Nuxt, SvelteKit, plain `<script>`, Node 18+, Deno, Bun, Cloudflare Workers. |
+| **Runs anywhere** | React, Vue, Svelte, Angular, Next.js, Nuxt, SvelteKit, plain `<script>`, Node 20+, Deno, Bun, Cloudflare Workers. |
 | **One request engine** | The worker and the main thread execute the *same* compiled code, so behaviour can never drift between modes. |
 | **Concurrency-safe refresh** | 50 simultaneous 401s trigger exactly **one** refresh call — a shared promise, not a polling loop. |
 | **Drop-in for TanStack Query / SWR** | Failures reject with a typed `ApiError`; switch to a never-throwing envelope with one flag. |
