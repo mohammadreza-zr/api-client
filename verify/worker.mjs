@@ -200,6 +200,44 @@ try {
 
   api.destroy();
   check("destroy is clean", true);
+
+  // ── client-wide throwError must behave identically in worker mode ──
+  const strict = createClient({
+    baseUrl: BASE,
+    refreshSkewMs: 0,
+    throwError: true,
+    onError: () => {},
+  });
+  check("worker mode engaged for strict client", strict.isWorker === true);
+
+  let workerThrew = false;
+  let workerErr;
+  try {
+    await strict.get("/boom");
+  } catch (e) {
+    workerThrew = true;
+    workerErr = e;
+  }
+  check("worker: client-wide throwError rejects", workerThrew);
+  check(
+    "worker: rejection is ApiError with statusCode 500",
+    workerErr?.name === "ApiError" && workerErr?.statusCode === 500,
+    `${workerErr?.name}/${workerErr?.statusCode}`,
+  );
+
+  const strictOk = await strict.get("/echo");
+  check("worker: success still resolves under throwError", strictOk.status === true);
+
+  let workerOptOut = false;
+  try {
+    const r = await strict.get("/boom", { throwError: false });
+    workerOptOut = r.status === false && r.statusCode === 500;
+  } catch {
+    workerOptOut = false;
+  }
+  check("worker: per-request throwError:false overrides default", workerOptOut);
+
+  strict.destroy();
 } catch (e) {
   fail++;
   console.error("\nUNEXPECTED:", e);

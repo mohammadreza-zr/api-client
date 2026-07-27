@@ -189,6 +189,18 @@ export interface ClientOptions {
   /** Default request timeout in ms. Default `30000`. */
   timeout?: number;
 
+  /**
+   * Reject the promise on failure instead of resolving with `status: false`.
+   *
+   * Set this to `true` when pairing the client with TanStack Query, SWR, Vue
+   * Query or any library that detects failure through a rejected promise —
+   * otherwise a 500 is delivered as a *successful* result and cached as data.
+   * Individual calls can still opt out with `throwError: false`.
+   *
+   * Default `false`, which keeps the never-throwing envelope style.
+   */
+  throwError?: boolean;
+
   /** Headers merged into every request. */
   headers?: Record<string, string>;
 

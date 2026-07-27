@@ -219,7 +219,28 @@ Nested params serialize the way most REST backends expect:
 // → name=x&wallet[balance]=0&wallet[tokens]=BTC&wallet[tokens]=USDT
 ```
 
-`FormData`, `Blob`, `ArrayBuffer`, `URLSearchParams` and streams are detected and passed through untouched (the `Content-Type` header is dropped so the runtime can set the multipart boundary).
+### Uploads and binary bodies
+
+`FormData`, `File`/`Blob`, `ArrayBuffer`, typed arrays (`Uint8Array`, `DataView`, …), `URLSearchParams` and `ReadableStream` are detected and passed to `fetch` untouched — never JSON-stringified.
+
+The default `Content-Type: application/json` is dropped for these bodies so the runtime can set the correct one (including the `multipart/form-data` boundary). An explicit per-request header always wins:
+
+```ts
+// multipart/form-data; boundary=… — set by the runtime
+const form = new FormData();
+form.append("file", fileInput.files[0]);
+await api.post("/upload", form);
+
+// application/octet-stream — from the Blob itself
+await api.post("/upload", new Blob([bytes], { type: "application/octet-stream" }));
+
+// image/png — your explicit header wins
+await api.post("/upload", pngBytes, { headers: { "Content-Type": "image/png" } });
+```
+
+Uploads survive the `401 → refresh → retry` flow: the body is re-sent intact on the retry.
+
+> Large uploads: the default 30s timeout applies per attempt. Pass `timeout: 0` to disable it for a specific call.
 
 ---
 
@@ -229,6 +250,7 @@ Nested params serialize the way most REST backends expect:
 |---|---|---|
 | `baseUrl` | auto-detected | Falls back to `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BASE_URL`, `VITE_API_URL`, `VITE_BASE_URL`, `NUXT_PUBLIC_API_URL`, `API_URL` |
 | `timeout` | `30000` | Per-request timeout in ms |
+| `throwError` | `false` | Reject with `ApiError` on failure instead of resolving. **Set `true` for TanStack Query / SWR.** Overridable per request |
 | `headers` | `{}` | Merged into every request |
 | `authMode` | `"header"` | `"header"` or `"cookie"` |
 | `credentials` | per mode | `"same-origin"`, or `"include"` in cookie mode |
@@ -266,10 +288,25 @@ createClient({
 
 ## Framework recipes
 
-### React + TanStack Query
+### TanStack Query / SWR — set `throwError: true`
+
+These libraries decide success or failure by whether the promise **rejects**. By default this client never rejects: it resolves with `{ status: false, statusCode: 500 }`. That means **a failed request would be cached as successful data**, `isError` would stay `false`, and retries would never fire.
+
+Enable rejection once, on the client:
+
+```ts
+// lib/api.ts
+export const api = createClient({
+  baseUrl: process.env.NEXT_PUBLIC_API_URL,
+  throwError: true, // failures reject with ApiError — required for react-query/SWR
+});
+```
+
+Individual calls can still opt out with `throwError: false` when you want the envelope.
 
 ```tsx
 import { useQuery } from "@tanstack/react-query";
+import { ApiError } from "@mohammadreza-zr/api-client";
 import { api } from "@/lib/api";
 
 export const userKeys = {
@@ -280,13 +317,34 @@ export const userKeys = {
 export function useUser(id: number) {
   return useQuery({
     queryKey: userKeys.detail(id),
-    queryFn: () =>
-      api.get<User>("/users/{id}", { addTemplateToUrl: { id }, throwError: true }),
+    // `signal` wires react-query cancellation straight through to fetch
+    queryFn: ({ signal }) =>
+      api.get<User>("/users/{id}", { addTemplateToUrl: { id }, signal }),
     select: (res) => res.data,
     enabled: !!id,
+    retry: (count, error) => {
+      // Never retry client errors; ApiError carries the status code.
+      if (error instanceof ApiError && error.statusCode < 500) return false;
+      return count < 3;
+    },
   });
 }
 ```
+
+`ApiError` exposes `statusCode`, `errors` (field-level validation), `data` and the full `response`, so error branches stay typed.
+
+### SWR
+
+```ts
+import useSWR from "swr";
+import { api } from "@/lib/api";
+
+const { data, error, isLoading } = useSWR("/users", (url) =>
+  api.get<User[]>(url).then((r) => r.data),
+);
+```
+
+Because the client rejects on failure, `error` is a real `ApiError` and SWR's built-in retry works as designed.
 
 ### Next.js (App Router)
 
