@@ -38,6 +38,7 @@ export type HostMessage =
   | { kind: "setTokens"; id: number; tokens: TokenPair }
   | { kind: "authState"; id: number }
   | { kind: "refresh"; id: number }
+  | { kind: "restoreSession"; id: number; url?: string }
   | { kind: "destroy" }
   /** Reply to a worker-initiated storage read/write. */
   | { kind: "storageResult"; id: number; tokens: TokenPair | null };

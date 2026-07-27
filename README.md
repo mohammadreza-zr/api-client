@@ -490,6 +490,7 @@ api.logout<R>(config?)           // clear tokens everywhere
 api.setTokens({ accessToken, refreshToken, expiresAt? })
 api.refresh()                    // force a refresh; null on failure
 api.getAuthState()               // { isAuthenticated, expiresAt, user }
+api.restoreSession("/api/auth/me") // cookie mode: detect an existing session on boot
 api.onAuthStateChange(listener)  // returns unsubscribe
 api.isWorker                     // whether requests run in a worker
 api.destroy()                    // terminate worker + close channel

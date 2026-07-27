@@ -333,6 +333,10 @@ export class WorkerHost {
     return this.call<void>((id) => ({ kind: "setTokens", id, tokens }));
   }
 
+  restoreSession(url?: string): Promise<AuthState> {
+    return this.call<AuthState>((id) => ({ kind: "restoreSession", id, url }));
+  }
+
   getAuthState(): Promise<AuthState> {
     return this.call<AuthState>((id) => ({ kind: "authState", id }));
   }
@@ -366,6 +370,17 @@ export class WorkerHost {
 
 // ── helpers ──────────────────────────────────────────────
 
+/** The page origin, so relative URLs behave the same inside a Blob worker. */
+function pageOrigin(): string {
+  try {
+    return typeof location !== "undefined" && location.origin && location.origin !== "null"
+      ? location.origin
+      : "";
+  } catch {
+    return "";
+  }
+}
+
 function toSerializableOptions(options: ClientOptions): SerializableOptions {
   const {
     storage,
@@ -393,12 +408,19 @@ function toSerializableOptions(options: ClientOptions): SerializableOptions {
     /*
      * Resolve the base URL here, on the main thread.
      *
-     * The worker runs from a Blob, so the bundler never touched its source and
-     * `process.env` / `import.meta.env` are both absent inside it. Detecting
-     * there would always yield `""` and every relative URL would hit the page
-     * origin instead of the API.
+     * Two reasons this cannot be left to the worker:
+     *
+     * 1. The worker runs from a Blob, so no bundler touched its source and
+     *    `process.env` / `import.meta.env` are both absent — detection there
+     *    would always yield "".
+     *
+     * 2. A worker created from `URL.createObjectURL` has a `blob:` base URL,
+     *    and a relative request cannot resolve against it (`new URL("/me",
+     *    "blob:http://host/uuid")` throws). On the main thread a relative URL
+     *    would simply hit the page origin, so fall back to that origin to keep
+     *    worker and inline mode behaving identically.
      */
-    baseUrl: options.baseUrl ?? detectBaseUrl() ?? "",
+    baseUrl: options.baseUrl ?? (detectBaseUrl() || pageOrigin()),
   };
 }
 

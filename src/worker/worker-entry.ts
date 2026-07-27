@@ -143,6 +143,12 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
         break;
       }
 
+      case "restoreSession": {
+        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
+        send({ kind: "authState", id: msg.id, state: await client.restoreSession(msg.url) });
+        break;
+      }
+
       case "authState": {
         if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
         send({ kind: "authState", id: msg.id, state: await client.getAuthState() });

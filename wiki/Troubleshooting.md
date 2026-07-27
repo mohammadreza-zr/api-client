@@ -158,6 +158,46 @@ rm -rf node_modules/.vite .next/cache   # bundler caches hold the old module
 
 ---
 
+### Worker mode: relative URLs fail (`Failed to parse URL`)
+
+A Blob worker's base URL is `blob:http://your-origin/uuid`, and relative paths
+cannot resolve against it — unlike on the main thread, where they resolve
+against the page origin.
+
+Fixed in v1.0.2: the host now passes the page origin to the worker, so relative
+URLs behave identically in both modes. On earlier versions the workaround was:
+
+```ts
+baseUrl: import.meta.client ? window.location.origin : config.public.apiUrl,
+```
+
+which is no longer needed — and was a footgun during SSR, where `window` is
+undefined.
+
+---
+
+### Cookie mode: `isAuthenticated` is always false
+
+With `authMode: "cookie"` the tokens are httpOnly, so JS cannot read them. The
+client only learns about a session from the server's responses.
+
+- **Right after login it should now be `true`** — a 2xx from `login()` marks the
+  session active. If it isn't, upgrade: before v1.0.2 `isAuthenticated` required
+  a readable access token, so cookie mode reported `false` forever.
+- **On a fresh page load it starts `false` by design.** The cookie is there, but
+  invisible. Ask the server once on startup:
+
+  ```ts
+  const state = await api.restoreSession("/api/auth/me");
+  ```
+
+- **If it flips to `false` unexpectedly**, a request returned 401/403 after the
+  refresh flow. That is the server rejecting the cookie — check that it is
+  actually being sent (`credentials: "include"`, and for a cross-origin API,
+  `Access-Control-Allow-Credentials: true` with an explicit origin).
+
+---
+
 ### User is logged out after every page reload
 
 First, check whether the tokens are being written at all — look for `apiclient.tokens` in DevTools → Application → Local Storage (or Cookies).

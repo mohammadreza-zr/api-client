@@ -132,6 +132,31 @@ const { isAuthenticated, expiresAt, user } = await api.getAuthState();
 
 ---
 
+### `restoreSession(url?)`
+
+```ts
+restoreSession(url?: string): Promise<AuthState>;
+```
+
+Asks the server whether a session already exists, and records the answer.
+
+Needed for `authMode: "cookie"`: httpOnly cookies are unreadable from JS, so
+after a page reload the client cannot tell a signed-in visitor from a signed-out
+one until it makes a request.
+
+```ts
+// On app startup
+const state = await api.restoreSession("/api/auth/me");
+```
+
+- With `url`, it calls that endpoint and also populates `state.user` from the
+  response.
+- Without `url`, it probes the refresh endpoint.
+- In **header mode** it makes no request and simply returns the rehydrated
+  state, so it is safe to call unconditionally.
+
+---
+
 ### `onAuthStateChange(listener)`
 
 ```ts
