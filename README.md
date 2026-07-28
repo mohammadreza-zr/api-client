@@ -386,7 +386,22 @@ api.pending();                  // inspect what's in flight
 api.cancel("/x", "reason");     // returns how many it stopped
 ```
 
-Full guide: **[Cancellation](https://github.com/mohammadreza-zr/api-client/wiki/Cancellation)**.
+### With TanStack Query / SWR
+
+Whoever owns the request lifecycle should own its cancellation. React Query hands your `queryFn` a `signal` — wire it through and it cancels on unmount and key change:
+
+```ts
+useQuery({
+  queryKey: ["users"],
+  queryFn: ({ signal }) => api.get<User[]>("/users", { signal }).then((r) => r.data),
+});
+```
+
+`api.cancel()` still works on those requests, it's just rarely the better tool — react-query can't see it, so it caches the canceled envelope as success and may retry. Cancel a group with `queryClient.cancelQueries({ queryKey: ["product"] })` instead.
+
+Mutations are the exception: react-query gives them **no** signal and doesn't cancel them on unmount, so a `cancelScope` is the right answer there. SWR likewise has no signal.
+
+Full guide, with copy-paste recipes for React, Next, Vue, Svelte, Angular, TanStack Query and SWR: **[Cancellation](https://github.com/mohammadreza-zr/api-client/wiki/Cancellation)**.
 
 ---
 

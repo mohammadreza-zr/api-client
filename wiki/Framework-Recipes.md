@@ -241,7 +241,13 @@ export class ProductComponent implements OnDestroy {
 }
 ```
 
-Narrow any of these to a single screen's endpoints with a URL pattern — `api.cancel("/api/v1/products")`. See **[[Cancellation]]**.
+**TanStack Query / SWR:** react-query hands your `queryFn` a `signal` — wire it through and it cancels for you. Mutations get no signal and aren't canceled on unmount, so use a scope there.
+
+```ts
+useQuery({ queryKey: ["users"], queryFn: ({ signal }) => api.get<User[]>("/users", { signal }).then(r => r.data) });
+```
+
+Narrow any of these to a single screen's endpoints with a URL pattern — `api.cancel("/api/v1/products")`. Full recipes for every framework, plus the react-query and SWR specifics: **[[Cancellation]]**.
 
 ---
 

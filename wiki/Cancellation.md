@@ -206,46 +206,175 @@ try {
 
 ## Framework recipes
 
+Copy-paste ready. Each one is complete — client setup included — and enables the options that make cancellation actually useful.
+
+### The client
+
+```ts
+// lib/api.ts
+import { createClient } from "@mrzr/api-client";
+
+export const api = createClient({
+  baseUrl: process.env.NEXT_PUBLIC_API_URL,
+  cancel: {
+    methods: ["GET"],   // reads only; add "all" if you also cancel writes
+    takeLatest: true,   // a newer request retires its older twin
+  },
+});
+```
+
+`takeLatest` is the one people forget and then miss: it kills the stale-search race and quietly dedupes React StrictMode's double-mount in dev.
+
 ### React — cancel on unmount
 
 ```tsx
-useEffect(() => {
-  const scope = api.cancelScope("user-list");   // inside the effect
+import { useEffect, useState } from "react";
+import { api } from "@/lib/api";
 
-  (async () => {
-    const res = await scope.get<User[]>("/users");
-    if (res.canceled) return;                   // unmounted — nothing to do
-    setUsers(res.data);
-  })();
+export function UserList() {
+  const [users, setUsers] = useState<User[]>([]);
 
-  return () => scope.cancel();
-}, []);
+  useEffect(() => {
+    const scope = api.cancelScope("user-list");   // inside the effect
+
+    (async () => {
+      const res = await scope.get<User[]>("/users");
+      if (res.canceled) return;                   // unmounted — nothing to do
+      setUsers(res.data ?? []);
+    })();
+
+    return () => scope.cancel();
+  }, []);
+
+  return <ul>{users.map((u) => <li key={u.id}>{u.name}</li>)}</ul>;
+}
 ```
 
 Create the scope **inside** the effect. A module-level scope is shared by every mount, so a remount would cancel the new request along with the old one.
+
+### React — a reusable hook
+
+```tsx
+import { useEffect, useRef } from "react";
+import { api } from "@/lib/api";
+import type { CancelScope } from "@mrzr/api-client";
+
+/** A cancel scope tied to the component's lifetime. */
+export function useCancelScope(name: string): CancelScope {
+  const ref = useRef<CancelScope>();
+  ref.current ??= api.cancelScope(name);
+
+  useEffect(() => {
+    const scope = ref.current!;
+    return () => scope.cancel();
+  }, []);
+
+  return ref.current;
+}
+```
+
+```tsx
+const scope = useCancelScope("dashboard");
+const res = await scope.get("/api/v1/stats");
+if (res.canceled) return;
+```
+
+### React — search box with take-latest
+
+```tsx
+const [results, setResults] = useState<Result[]>([]);
+
+useEffect(() => {
+  if (!query) return;
+
+  (async () => {
+    const res = await api.get<Result[]>("/search", {
+      params: { q: query },
+      cancelKey: "search",   // identity
+      takeLatest: true,      // supersede the previous keystroke
+    });
+    if (res.canceled) return;   // a newer keystroke won
+    setResults(res.data ?? []);
+  })();
+}, [query]);
+```
+
+No debounce required for correctness — the newest request always wins. Debounce still saves requests.
+
+### A modal component
+
+```tsx
+import { useEffect, useMemo, useState } from "react";
+import { api } from "@/lib/api";
+
+export function ProductModal({ id }: { id: string }) {
+  const [product, setProduct] = useState<Product>();
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const scope = useMemo(() => api.cancelScope(`product-${id}`), [id]);
+
+  useEffect(() => () => scope.cancel(), [scope]);
+
+  useEffect(() => {
+    (async () => {
+      const [p, r] = await Promise.all([
+        scope.get<Product>(`/api/v1/products/${id}`),
+        scope.get<Review[]>(`/api/v1/products/${id}/reviews`),
+      ]);
+      if (p.canceled || r.canceled) return;   // modal closed mid-flight
+      setProduct(p.data);
+      setReviews(r.data ?? []);
+    })();
+  }, [scope, id]);
+
+  return <Dialog>{/* … */}</Dialog>;
+}
+```
+
+Everything the modal started dies with it — one `scope.cancel()`, however many requests.
 
 ### Next.js App Router — cancel on navigation
 
 ```tsx
 "use client";
-const pathname = usePathname();
+import { useEffect } from "react";
+import { usePathname } from "next/navigation";
+import { api } from "@/lib/api";
 
-useEffect(() => () => api.cancel(), [pathname]);
+export function CancelOnNavigate() {
+  const pathname = usePathname();
+  useEffect(() => () => { api.cancel(); }, [pathname]);
+  return null;
+}
 ```
+
+Drop `<CancelOnNavigate />` in your root layout. Narrow it with a pattern — `api.cancel("/api/v1/products")` — if some requests should survive the transition.
 
 ### Next.js Pages Router
 
 ```ts
-router.events.on("routeChangeStart", () => api.cancel());
+// pages/_app.tsx
+useEffect(() => {
+  const onStart = () => api.cancel();
+  router.events.on("routeChangeStart", onStart);
+  return () => router.events.off("routeChangeStart", onStart);
+}, [router]);
 ```
 
 ### Vue — cancel on unmount
 
-```ts
+```vue
+<script setup lang="ts">
+import { onUnmounted, ref } from "vue";
+import { api } from "@/lib/api";
+
+const product = ref<Product>();
 const scope = api.cancelScope("product-detail");
+
 onUnmounted(() => scope.cancel());
 
-const { data } = await scope.get(`/api/v1/products/${id}`);
+const res = await scope.get<Product>(`/api/v1/products/${props.id}`);
+if (!res.canceled) product.value = res.data;
+</script>
 ```
 
 ### Vue Router — cancel on leave
@@ -257,27 +386,156 @@ router.beforeEach((to, from, next) => {
 });
 ```
 
-### A modal component
+### Svelte
 
-```tsx
-function ProductModal({ id, onClose }) {
-  const scope = useMemo(() => api.cancelScope(`product-${id}`), [id]);
-  useEffect(() => () => scope.cancel(), [scope]);
+```svelte
+<script lang="ts">
+  import { onDestroy } from "svelte";
+  import { api } from "$lib/api";
 
-  // every request in here dies with the modal
-  useEffect(() => { scope.get(`/api/v1/products/${id}`).then(setProduct); }, [scope, id]);
+  const scope = api.cancelScope("dashboard");
+  onDestroy(() => scope.cancel());
+
+  let stats: Stats | undefined;
+  scope.get<Stats>("/api/v1/stats").then((res) => {
+    if (!res.canceled) stats = res.data;
+  });
+</script>
+```
+
+### Angular
+
+```ts
+@Component({ /* … */ })
+export class ProductComponent implements OnInit, OnDestroy {
+  private scope = api.cancelScope("product");
+  product?: Product;
+
+  async ngOnInit() {
+    const res = await this.scope.get<Product>("/api/v1/products/1");
+    if (!res.canceled) this.product = res.data;
+  }
+
+  ngOnDestroy() { this.scope.cancel(); }
 }
 ```
 
-### TanStack Query
+## Using cancellation with a data library
 
-React Query already cancels through the `signal` it hands your `queryFn` — keep wiring that through. Use `api.cancel()` for the requests Query doesn't own:
+**Whoever owns the request lifecycle should own its cancellation.** If your data layer hands you a `signal`, wire it through and let the library drive. `api.cancel()` still works alongside it — it is not forbidden, just rarely the better tool for requests the library already manages.
+
+### TanStack Query — queries
+
+Wire the `signal` through and unwrap the envelope. That is the whole setup:
 
 ```ts
 useQuery({
   queryKey: ["users"],
-  queryFn: ({ signal }) => api.get<User[]>("/users", { signal }),
+  queryFn: ({ signal }) => api.get<User[]>("/users", { signal }).then((r) => r.data),
 });
+```
+
+React Query then cancels on unmount, on key change, and via `queryClient.cancelQueries()` — all aborting the real socket.
+
+> **Why `.then(r => r.data)`?** Without it you cache the whole `IRes` envelope, so you'd read `data.data.name` instead of `data.name`.
+
+> **Keep `throwError: true` (the default) for react-query.** It needs a rejection to mark a query failed; with `throwError: false` a 500 would be cached as successful data.
+
+### Cancelling a group of queries — the modal case
+
+Use `cancelQueries` with a **key prefix**. No scope needed, and no extra imports:
+
+```ts
+// every query under ["product", …]
+useQuery({ queryKey: ["product", id],            queryFn: ({ signal }) => api.get(`/api/v1/products/${id}`, { signal }).then(r => r.data) });
+useQuery({ queryKey: ["product", id, "reviews"], queryFn: ({ signal }) => api.get(`/api/v1/products/${id}/reviews`, { signal }).then(r => r.data) });
+
+// when the modal closes — one call cancels the whole prefix
+queryClient.cancelQueries({ queryKey: ["product"] });
+```
+
+```tsx
+function ProductModal({ id }: { id: string }) {
+  const qc = useQueryClient();
+  useEffect(() => () => { qc.cancelQueries({ queryKey: ["product"] }); }, [qc]);
+  // …
+}
+```
+
+Both sockets really abort, nothing partial is cached, and no retry is triggered.
+
+### Why `api.cancel()` isn't the first choice for queries
+
+It works — the socket really closes — but react-query can't see it happen, and two things follow:
+
+```ts
+api.cancel();          // react-query is unaware
+```
+
+1. **The canceled envelope gets cached as success.** Cancellation resolves (by design), so Query treats it as a normal result and stores `{ statusCode: 0, canceled: true }` as your data.
+2. **Query may retry it.** The failure looks retryable, so it re-fires the request you just canceled. Measured: 2 server hits instead of 1.
+
+Throwing from inside `queryFn` does not avoid the retry — verified against `DOMException`, `CancelledError` and a plain `Error`; all three still retried. Only `cancelQueries` stops it.
+
+So if you do reach for `api.cancel()` on a react-query-managed request, pair it with `cancelQueries` — tell Query first, then hard-abort:
+
+```ts
+await queryClient.cancelQueries({ queryKey: ["product"] });
+scope.cancel();   // belt and braces; usually already a no-op
+```
+
+### TanStack Query — mutations
+
+Mutations get **no `signal`** from react-query (the context is `{ client, meta, mutationKey }`), and are **not** canceled on unmount — deliberately, since a mutation is a side effect. So here `api.cancel()` is the only option, and a scope is the clean way:
+
+```tsx
+function CreateTodo() {
+  const scope = useMemo(() => api.cancelScope("create-todo"), []);
+  useEffect(() => () => scope.cancel(), [scope]);
+
+  const mutation = useMutation({
+    mutationFn: async (input: NewTodo) => {
+      const res = await scope.post<Todo>("/todos", input, { cancelable: true });
+      if (res.canceled) throw new DOMException("Canceled", "AbortError");
+      return res.data;
+    },
+    onError: (e) => {
+      if (e instanceof ApiError && e.canceled) return;   // don't toast a cancel
+      if ((e as Error)?.name === "AbortError") return;
+      toast.error((e as Error).message);
+    },
+  });
+}
+```
+
+The `if (res.canceled) throw` is what stops `onSuccess` firing with a canceled envelope. Mutations don't retry by default, so there is no retry storm here.
+
+> Cancelling a write means the server may already have committed it — you only stop hearing the answer. Fine for a draft-save; think twice for a payment.
+
+### SWR
+
+SWR has no `signal`, so `api.cancel()` and scopes are the right tool:
+
+```tsx
+const scope = useMemo(() => api.cancelScope("dashboard"), []);
+useEffect(() => () => scope.cancel(), [scope]);
+
+const { data } = useSWR("/api/v1/stats", (url) =>
+  scope.get(url).then((r) => {
+    if (r.canceled) throw new DOMException("Canceled", "AbortError");
+    return r.data;
+  }),
+);
+```
+
+### No data library
+
+The simplest case — resolve and guard, no `try`/`catch` needed:
+
+```ts
+const res = await scope.get("/api/v1/products");
+if (res.canceled) return;
+render(res.data);
 ```
 
 ---
