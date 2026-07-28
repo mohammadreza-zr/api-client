@@ -1,4 +1,5 @@
 import type { HttpMethod, IRes, LogEntry, RequestConfig } from "../types";
+import { cancelMessage, linkSignals, reasonOf } from "./cancel";
 import { buildUrl } from "./url";
 
 /** Everything the engine needs from its host (main thread or worker). */
@@ -44,6 +45,11 @@ export interface EngineRequest {
   url: string;
   body?: unknown;
   config?: RequestConfig<unknown>;
+  /**
+   * Cancellation signal owned by the client's registry, merged with the
+   * caller's `config.signal` and the per-attempt timeout.
+   */
+  cancelSignal?: AbortSignal;
 }
 
 /**
@@ -140,34 +146,6 @@ const PASSTHROUGH: (keyof RequestInit)[] = [
   "referrerPolicy",
   "window",
 ];
-
-/** Combines the timeout signal with any caller-supplied signal. */
-function linkSignals(
-  timeoutSignal: AbortSignal,
-  userSignal: AbortSignal | null | undefined,
-): { signal: AbortSignal; dispose: () => void } {
-  if (!userSignal) return { signal: timeoutSignal, dispose: () => {} };
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const anyFn = (AbortSignal as any)?.any;
-  if (typeof anyFn === "function") {
-    return { signal: anyFn.call(AbortSignal, [timeoutSignal, userSignal]), dispose: () => {} };
-  }
-
-  // Fallback for runtimes without AbortSignal.any.
-  const controller = new AbortController();
-  const abort = (reason?: unknown) => controller.abort(reason);
-  if (userSignal.aborted) abort(userSignal.reason);
-  else if (timeoutSignal.aborted) abort(timeoutSignal.reason);
-  else {
-    userSignal.addEventListener("abort", () => abort(userSignal.reason), { once: true });
-    timeoutSignal.addEventListener("abort", () => abort(timeoutSignal.reason), { once: true });
-  }
-  return {
-    signal: controller.signal,
-    dispose: () => {},
-  };
-}
 
 function headersToObject(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
@@ -305,13 +283,22 @@ export async function executeRequest<R>(
           ? setTimeout(() => timeoutController.abort(new DOMException("Timeout", "TimeoutError")), timeoutMs)
           : undefined;
 
-      const { signal } = linkSignals(timeoutController.signal, config.signal);
+      // Timeout, the caller's own signal, and the cancel registry's — first
+      // one to fire wins, and its `reason` is what reaches `applyFailure`.
+      const { signal, release } = linkSignals([
+        timeoutController.signal,
+        config.signal,
+        request.cancelSignal,
+      ]);
       init.signal = signal;
 
       try {
         return await fetch(finalUrl, init);
       } finally {
         if (timer) clearTimeout(timer);
+        // Detach from the long-lived cancel signal; a scope controller would
+        // otherwise accumulate a listener for every request it ever covered.
+        release();
       }
     };
 
@@ -412,7 +399,7 @@ async function parseBody(response: Response): Promise<unknown> {
   }
 }
 
-/** Normalizes thrown errors (abort, timeout, offline, bad URL) into the envelope. */
+/** Normalizes thrown errors (cancel, abort, timeout, offline, bad URL) into the envelope. */
 function applyFailure(result: IRes<unknown>, error: unknown): void {
   const err = error as { name?: string; message?: string } | undefined;
   result.status = false;
@@ -424,8 +411,16 @@ function applyFailure(result: IRes<unknown>, error: unknown): void {
     return;
   }
   if (err?.name === "AbortError") {
+    /*
+     * Cancellation and abort are the same event to `fetch`, but not to the
+     * caller: a cancel is something the app asked for, so it is flagged and
+     * carries the reason. A timeout is neither — it keeps its own 408.
+     */
     result.statusCode = 0;
-    result.message = "Request aborted";
+    result.canceled = true;
+    result.message = cancelMessage(error);
+    const reason = reasonOf(error);
+    if (reason) result.cancelReason = reason;
     return;
   }
 

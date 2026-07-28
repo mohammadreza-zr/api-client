@@ -4,7 +4,7 @@
 git clone https://github.com/mohammadreza-zr/api-client.git
 cd api-client
 npm install
-npm run verify   # build + run all four suites
+npm run verify   # build + run every suite
 ```
 
 ---
@@ -19,6 +19,7 @@ src/
   internal/
     core-client.ts          the full client: auth actions, refresh, engine wiring
     engine.ts               executeRequest() — the one request pipeline
+    cancel.ts               cancel registry, URL patterns, selectors, signal linking
     auth-store.ts           token state, expiry, refresh coalescing, subscribers
     broadcast.ts            BroadcastChannel tab sync + leader election
     storage.ts              Memory/Web/Cookie adapters + resolveStorage
@@ -83,7 +84,7 @@ Order matters: the worker must be inlined before the main bundle is built, or `d
 npm run verify
 ```
 
-Four suites, **121 assertions**, all against real `node:http` servers — no mocked `fetch`, because the whole point is verifying real network behaviour.
+Ten suites, **455 assertions**, all against real `node:http` servers — no mocked `fetch`, because the whole point is verifying real network behaviour.
 
 | Suite | Covers |
 |---|---|
@@ -91,6 +92,12 @@ Four suites, **121 assertions**, all against real `node:http` servers — no moc
 | `worker.mjs` | Worker parity — every core behaviour re-asserted in worker mode |
 | `audit.mjs` | Upload byte integrity, content types, `@tanstack/query-core` and SWR integration |
 | `features.mjs` | `throwError` semantics, `uploadSkewMs`, stream retry, CSRF double-submit |
+| `baseurl.mjs` | Env-var detection in every module mode, main thread and worker |
+| `storage.mjs` | Persistence across all adapters, including the worker storage bridge |
+| `cookie-auth.mjs` | httpOnly cookie mode, session restore, cross-tab propagation |
+| `cancel.mjs` | Opt-in tracking, URL patterns, keys, groups, scopes, `takeLatest` |
+| `cancel-worker.mjs` | The same, through the real worker bundle — including that the socket really closes |
+| `package.mjs` | Tarball contents, exports map, type resolution, the `prepare` hook |
 
 Some assertions are labelled `[documented]` — they lock in behaviour that is surprising but intentional, such as *"an envelope-style 500 looks like SUCCESS to react-query"*. Don't delete them; they're the argument for the current defaults.
 
@@ -151,7 +158,7 @@ Two workflows live in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | every push and pull request | lint, typecheck, build, then all four `verify/` suites on Node 20, 22 and 24 |
+| `ci.yml` | every push and pull request | lint, typecheck, build, then the `verify/` suites on Node 20, 22 and 24 |
 | `release.yml` | pushing a `v*` tag | re-runs the full check matrix, then publishes to npm and opens a GitHub Release |
 
 A pull request cannot merge until `ci.yml` is green on every Node version in the matrix.
@@ -171,7 +178,7 @@ git push --follow-tags
 `release.yml` then takes over:
 
 1. Verifies the tag matches the `version` in `package.json` and fails fast if they disagree.
-2. Runs lint, typecheck, build and all four suites across Node 20, 22 and 24.
+2. Runs lint, typecheck, build and the verification suites across Node 20, 22 and 24.
 3. Publishes to npm with `--provenance`, so the package carries a signed link back to the exact commit and workflow run that built it.
 4. Creates the GitHub Release with generated notes.
 

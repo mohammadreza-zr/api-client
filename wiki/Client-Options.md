@@ -38,6 +38,8 @@ const api = createClient({ /* ClientOptions */ });
 | `xsrfCookieName` | `string` | – | Cookie holding the CSRF token |
 | `xsrfHeaderName` | `string` | `"X-CSRF-Token"` | Header to mirror it into |
 | `getCsrfToken` | `() => string \| undefined` | – | Supply the token directly. Takes precedence |
+| **Cancellation** ||||
+| `cancel` | `boolean \| CancelOptions` | `false` | Opt in to cancellation. See [[Cancellation]] |
 | **Execution** ||||
 | `worker` | `boolean` | `true` | Run requests in a Web Worker |
 | `multiTab` | `boolean` | `true` | Sync auth across tabs via BroadcastChannel |
@@ -95,6 +97,28 @@ Being explicit is always clearer:
 ```ts
 createClient({ baseUrl: process.env.NEXT_PUBLIC_API_URL });
 ```
+
+---
+
+## `cancel`
+
+Opt in to cancellation — off by default, so nothing is tracked until you ask.
+
+```ts
+createClient({ cancel: true });                  // GETs become cancelable
+createClient({ cancel: { methods: "all" } });    // every method
+createClient({ cancel: { takeLatest: true } });  // and auto-supersede
+```
+
+| Sub-option | Type | Default | Purpose |
+|---|---|---|---|
+| `methods` | `HttpMethod[] \| "all"` | `["GET"]` | Which methods are tracked automatically |
+| `throwOnCancel` | `boolean` | `false` | Reject instead of resolving when canceled. Independent of `throwError` |
+| `takeLatest` | `boolean` | `false` | Supersede the previous request with the same identity |
+
+Only `GET` is covered by default: cancelling a read is always safe, whereas a canceled write may already have been committed by the server. Per-request `cancelable` overrides this in both directions.
+
+Full guide: **[[Cancellation]]**.
 
 ---
 

@@ -15,9 +15,10 @@ import {
 } from "@mrzr/api-client";
 
 import type {
-  ApiClient, AuthMode, AuthState, ClientOptions, HttpMethod, IRes,
-  ListResponse, LogEntry, Ordering, Params, RequestConfig,
-  StorageKind, TokenExtractor, TokenPair, TokenStorage,
+  ApiClient, AuthMode, AuthState, CancelMatch, CancelOptions, CancelScope,
+  CancelSelector, ClientOptions, HttpMethod, IRes, ListResponse, LogEntry,
+  Ordering, Params, PendingRequest, RequestConfig, StorageKind,
+  TokenExtractor, TokenPair, TokenStorage,
 } from "@mrzr/api-client";
 ```
 
@@ -171,6 +172,62 @@ useEffect(() => api.onAuthStateChange(setState), []);
 
 ---
 
+### `cancel(selector?, reason?)`
+
+```ts
+cancel(selector?: CancelSelector, reason?: string): number;
+```
+
+Cancels matching in-flight requests and returns how many were stopped. Requires the [`cancel`](Cancellation) option, or a per-request `cancelable` — only tracked requests can be canceled.
+
+```ts
+api.cancel();                                     // everything in flight
+api.cancel("/api/v1/products");                   // URL pattern, key or group
+api.cancel(/\/products\/\d+$/);                    // regex
+api.cancel({ url: "/users/:id", method: "GET" }); // all fields must match
+api.cancel((r) => Date.now() - r.startedAt > 10_000);
+api.cancel("/api/v1/products", "left the page");  // with a reason
+```
+
+Canceled requests reject with an `ApiError` carrying `canceled: true`, or resolve with `{ canceled: true, statusCode: 0 }` when `throwOnCancel` is `false`. `onError` never fires for them. Always safe to call — with nothing in flight it returns `0`.
+
+---
+
+### `pending(selector?)`
+
+```ts
+pending(selector?: CancelSelector): PendingRequest[];
+```
+
+The cancelable requests currently in flight, optionally filtered by the same selectors `cancel()` accepts.
+
+```ts
+if (api.pending("/api/v1/products").length) showSpinner();
+```
+
+---
+
+### `cancelScope(name?)`
+
+```ts
+cancelScope(name?: string): CancelScope;
+```
+
+Creates a cancellation scope — a wrapper whose requests are all tagged, so one call stops the lot.
+
+```ts
+const scope = api.cancelScope("product-modal");
+await scope.get("/api/v1/products/12");
+scope.cancel();          // everything the scope started
+scope.pending();         // just the scope's requests
+```
+
+Requests made through a scope are cancelable **by default**, whatever the client-wide setting — creating the scope is the opt-in. Writes still need `cancelable: true`. An omitted `name` gets a unique generated one.
+
+See **[[Cancellation]]**.
+
+---
+
 ### `isWorker`
 
 ```ts
@@ -211,6 +268,8 @@ class ApiError extends Error {
   readonly errors?: Record<string, string[]>;
   readonly data?: unknown;
   readonly response: IRes<unknown>;
+  readonly canceled: boolean;
+  readonly cancelReason?: string;
   constructor(response: IRes<unknown>);
 }
 ```
@@ -309,6 +368,11 @@ All three implement `get()` / `set(tokens)` / `clear()` and swallow storage erro
 | `ApiClient` | type | The client interface |
 | `ClientOptions` | type | `createClient` options |
 | `RequestConfig<T>` | type | Per-request options |
+| `CancelSelector` | type | What `cancel()` accepts |
+| `CancelMatch` | type | The object selector form |
+| `CancelOptions` | type | The `cancel` client option |
+| `CancelScope` | type | A scope returned by `cancelScope()` |
+| `PendingRequest` | type | One tracked in-flight request |
 | `IRes<R>` | type | The response envelope |
 | `AuthState` | type | Auth state (never tokens) |
 | `TokenPair` | type | `{ accessToken?, refreshToken?, expiresAt? }` |

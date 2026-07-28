@@ -1,7 +1,7 @@
 /** Throwaway audit server: upload + integration probes. Not part of the package. */
 import { createServer } from "node:http";
 
-const state = { lastCT: null, lastLen: 0, lastRaw: null, calls: 0, unauthorizedFirst: true };
+const state = { lastCT: null, lastLen: 0, lastRaw: null, calls: 0, unauthorizedFirst: true, slowHits: 0 };
 
 const json = (res, code, body) => {
   res.writeHead(code, { "Content-Type": "application/json" });
@@ -57,6 +57,8 @@ export function start(port = 4610) {
     if (path === "/boom") return json(res, 500, { message: "Internal Server Error" });
     if (path === "/notfound") return json(res, 404, { message: "Nope" });
     if (path === "/slow") {
+      // Counted so a test can prove a cancel was not retried by the caller.
+      state.slowHits++;
       await new Promise((r) => setTimeout(r, 3000));
       return json(res, 200, { data: { slow: true } });
     }

@@ -21,18 +21,40 @@ export type SerializableOptions = Omit<
   | "onLog"
   | "worker"
   | "getCsrfToken"
+  /*
+   * Cancellation is host-side. The host owns the registry so `api.cancel()`
+   * stays synchronous, and forwards each cancellation as an `abort` message.
+   * Sending the option across too would duplicate the bookkeeping in a scope
+   * that can never be queried.
+   */
+  | "cancel"
 > & { storage?: Exclude<ClientOptions["storage"], object> };
 
-/** Request config minus the function hooks. */
+/**
+ * Request config minus the function hooks.
+ *
+ * Cancellation metadata is stripped too: the registry lives on the host, so
+ * the worker would only duplicate bookkeeping it can never be asked about.
+ * The host translates a cancellation into an `abort` message instead.
+ */
 export type SerializableConfig = Omit<
   RequestConfig<unknown>,
-  "beforeFunc" | "afterFunc" | "beforeSelectOptions" | "signal"
+  | "beforeFunc"
+  | "afterFunc"
+  | "beforeSelectOptions"
+  | "signal"
+  | "cancelable"
+  | "cancelKey"
+  | "cancelGroup"
+  | "takeLatest"
+  | "throwOnCancel"
 >;
 
 export type HostMessage =
   | { kind: "init"; options: SerializableOptions }
   | { kind: "request"; id: number; method: HttpMethod; url: string; body?: unknown; config?: SerializableConfig }
-  | { kind: "abort"; id: number }
+  /** `reason` is carried so the worker can report *why* it was canceled. */
+  | { kind: "abort"; id: number; reason?: string }
   | { kind: "login"; id: number; body: unknown; config?: SerializableConfig }
   | { kind: "logout"; id: number; config?: SerializableConfig }
   | { kind: "setTokens"; id: number; tokens: TokenPair }

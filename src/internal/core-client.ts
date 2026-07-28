@@ -1,13 +1,23 @@
 import type {
   AuthState,
+  CancelSelector,
   ClientOptions,
   HttpMethod,
   IRes,
+  PendingRequest,
   RequestConfig,
   TokenPair,
 } from "../types";
 import { AuthStore } from "./auth-store";
 import { TabSync } from "./broadcast";
+import {
+  CancelRegistry,
+  groupsOf,
+  isCancelable,
+  previewUrl,
+  resolveCancelDefaults,
+  type CancelDefaults,
+} from "./cancel";
 import { executeRequest, type EngineContext } from "./engine";
 import { defaultExtractTokens, extractUser } from "./extract";
 import { detectBaseUrl } from "./env";
@@ -50,6 +60,8 @@ export class CoreClient {
   private hooks: Pick<ClientOptions, "onAuthStateChanged" | "onAuthFailure" | "onError" | "onLog">;
   private hydrated: Promise<void>;
   private disposed = false;
+  private cancelDefaults: CancelDefaults;
+  private registry = new CancelRegistry();
 
   constructor(options: ClientOptions = {}) {
     const authMode = options.authMode ?? "header";
@@ -66,6 +78,7 @@ export class CoreClient {
     };
 
     this.defaultHeaders = { "Content-Type": "application/json", ...options.headers };
+    this.cancelDefaults = resolveCancelDefaults(options.cancel);
     this.xsrfCookieName = options.xsrfCookieName;
     this.xsrfHeaderName = options.xsrfHeaderName ?? "X-CSRF-Token";
     this.csrfProvider = options.getCsrfToken;
@@ -234,10 +247,32 @@ export class CoreClient {
   ): Promise<IRes<R>> {
     await this.hydrated;
 
-    const result = await executeRequest<R>(
-      { method, url, body, config: config as RequestConfig<unknown> },
-      this.context(),
-    );
+    const request = config as RequestConfig<unknown> | undefined;
+
+    /*
+     * Register the request only when it is actually cancelable, so a client
+     * that never opts in pays nothing — no map entry, no AbortController, no
+     * URL pre-build.
+     */
+    const tracked = isCancelable(method, request, this.cancelDefaults)
+      ? this.registry.track({
+          method,
+          url: previewUrl(url, config?.baseUrl ?? this.opts.baseUrl, request),
+          key: request?.cancelKey,
+          groups: groupsOf(request),
+          takeLatest: request?.takeLatest ?? this.cancelDefaults.takeLatest,
+        })
+      : undefined;
+
+    let result: IRes<R>;
+    try {
+      result = await executeRequest<R>(
+        { method, url, body, config: request, cancelSignal: tracked?.signal },
+        this.context(),
+      );
+    } finally {
+      tracked?.release();
+    }
 
     /*
      * Cookie mode: infer the session from what the server actually does.
@@ -255,11 +290,33 @@ export class CoreClient {
       }
     }
 
-    if (!result.status && !config?.hideErrorMessage) {
+    /*
+     * A cancellation is not an error the user should see. Firing `onError`
+     * here would pop a toast every time someone changed page or closed a
+     * modal, which is exactly what this feature exists to avoid.
+     */
+    if (!result.status && !result.canceled && !config?.hideErrorMessage) {
       this.hooks.onError?.(result);
     }
 
     return result;
+  }
+
+  // ── cancellation ───────────────────────────────────────
+
+  /** Cancels matching in-flight requests. Returns how many were stopped. */
+  cancel(selector?: CancelSelector, reason?: string): number {
+    return this.registry.cancel(selector, reason);
+  }
+
+  /** The cancelable requests currently in flight. */
+  pending(selector?: CancelSelector): PendingRequest[] {
+    return this.registry.pending(selector);
+  }
+
+  /** Whether a canceled request should reject. Independent of `throwError`. */
+  shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean {
+    return config?.throwOnCancel ?? this.cancelDefaults.throwOnCancel;
   }
 
   get<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>> {
@@ -282,6 +339,9 @@ export class CoreClient {
 
   async login<R = unknown>(body: unknown, config?: RequestConfig<R>): Promise<IRes<R>> {
     const result = await this.send<R>("POST", this.opts.loginUrl, body, {
+      // A caller can still opt in explicitly; the default is never to make an
+      // auth handshake collateral damage of a route change.
+      cancelable: false,
       ...config,
       skipAuth: true,
       refreshTokenCheck: false,
@@ -322,6 +382,7 @@ export class CoreClient {
 
     try {
       result = await this.send<R>("POST", this.opts.logoutUrl, this.buildRefreshBody(this.auth.refreshToken), {
+        cancelable: false,
         ...config,
         refreshTokenCheck: false,
         hideErrorMessage: true,
@@ -366,6 +427,14 @@ export class CoreClient {
       const probe = await this.send<unknown>("GET", url, undefined, {
         refreshTokenCheck: false,
         hideErrorMessage: true,
+        /*
+         * Never cancelable, even though it is a GET.
+         *
+         * This runs at app startup and establishes whether the user is signed
+         * in. A blanket `api.cancel()` on the first route change would abort
+         * it and leave the app believing there is no session.
+         */
+        cancelable: false,
       } as RequestConfig<unknown>);
 
       if (probe.status) {
@@ -391,6 +460,7 @@ export class CoreClient {
 
   destroy(): void {
     this.disposed = true;
+    this.registry.cancel(undefined, "client destroyed");
     this.tabs.destroy();
   }
 }

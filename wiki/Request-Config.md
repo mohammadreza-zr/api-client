@@ -25,6 +25,12 @@ await api.get<User>("/users/{id}", { /* RequestConfig<User> */ });
 | **Timing** ||||
 | `timeout` | `number` | `30000` | Per-attempt timeout in ms; `0` disables |
 | `signal` | `AbortSignal` | – | Your cancellation signal, merged with the timeout |
+| **Cancellation** ||||
+| `cancelable` | `boolean` | client setting | Track this request so `cancel()` can stop it |
+| `cancelKey` | `string` | – | A stable identity: cancel by name, and the unit `takeLatest` compares |
+| `cancelGroup` | `string \| string[]` | – | Tags for bulk cancellation |
+| `takeLatest` | `boolean` | `false` | Supersede the previous request with the same identity |
+| `throwOnCancel` | `boolean` | `false` | Reject instead of resolving when canceled |
 | **Auth** ||||
 | `skipAuth` | `boolean` | `false` | Send without `Authorization`, skip proactive refresh |
 | `refreshTokenCheck` | `boolean` | `true` | `false` disables the 401 → refresh → retry flow |
@@ -68,6 +74,10 @@ await api.get<User>("/users/{id}", {
   duplex: "half",
   log: true,
   signal: controller.signal,
+  cancelable: true,
+  cancelKey: "product-detail",
+  cancelGroup: "product-modal",
+  takeLatest: true,
   cache: "no-store",
   beforeFunc: (body) => body,
   afterFunc: (data) => data,
@@ -144,7 +154,39 @@ Emits a `LogEntry` to the client's `onLog` handler, or `console.info("[api-clien
 
 ### `signal`
 
-Combined with the internal timeout signal — whichever fires first wins. Aborting yields `statusCode: 0`, message `"Request aborted"`; a timeout yields `408`, `"Request timed out"`, so you can tell them apart.
+Combined with the internal timeout signal and the client's cancel registry — whichever fires first wins. Aborting yields `statusCode: 0` with `canceled: true` and message `"Request aborted"`; a timeout yields `408`, `"Request timed out"` and leaves `canceled` unset, so you can tell them apart.
+
+### `cancelable`, `cancelKey`, `cancelGroup`, `takeLatest`
+
+These drive `api.cancel()`. Cancellation is off until the client enables it, and even then covers only `GET` — but any single request can opt in or out:
+
+```ts
+await api.post("/draft", body, { cancelable: true });   // opt a write in
+await api.get("/session", { cancelable: false });       // opt a read out
+```
+
+`cancelKey` and `takeLatest` both imply `cancelable`. A `cancelGroup` alone only tags the request, so tagging a write never makes it cancelable behind your back.
+
+```ts
+// Stale-search: each keystroke retires the last
+await api.get("/search", { params: { q }, cancelKey: "search", takeLatest: true });
+
+// Bulk: one call kills them all
+await api.get("/a", { cancelGroup: "checkout", cancelable: true });
+api.cancel("checkout");
+```
+
+See **[[Cancellation]]** for the full picture.
+
+### `throwOnCancel`
+
+**Independent of `throwError`, and `false` by default**: a canceled request resolves with `canceled: true` even on a throwing client. Real failures still throw.
+
+That is deliberate — rejecting makes TanStack Query retry the request you just canceled, and turns the ordinary `useEffect` async pattern into an unhandled rejection. See **[[Cancellation]]**.
+
+```ts
+await api.get("/products", { throwOnCancel: true });   // opt back in
+```
 
 ### `stringifyBody` and `isFormData`
 

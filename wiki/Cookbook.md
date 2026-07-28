@@ -90,6 +90,30 @@ export async function collectAll<T>(path: string, max = 10_000): Promise<T[]> {
 
 ## Cancelling a stale search
 
+With the built-in registry this is one flag — no controller to track:
+
+```ts
+const api = createClient({ baseUrl, cancel: true });
+
+export async function search(q: string) {
+  try {
+    const { data } = await api.get<Result[]>("/search", {
+      params: { q },
+      cancelKey: "search",
+      takeLatest: true,     // retires the previous keystroke
+    });
+    return data ?? [];
+  } catch (e) {
+    if (e instanceof ApiError && e.canceled) return null; // superseded
+    throw e;
+  }
+}
+```
+
+Returning `null` for the canceled case lets the caller ignore stale results without treating them as failures.
+
+Doing it by hand, if you prefer an explicit controller:
+
 ```ts
 let inFlight: AbortController | undefined;
 
@@ -105,13 +129,56 @@ export async function search(q: string) {
     });
     return data ?? [];
   } catch (e) {
-    if (e instanceof ApiError && e.statusCode === 0) return null; // superseded
+    if (e instanceof ApiError && e.canceled) return null;
     throw e;
   }
 }
 ```
 
-Returning `null` for the aborted case lets the caller ignore stale results without treating them as failures.
+---
+
+## Dropping in-flight requests on navigation
+
+```ts
+const api = createClient({ baseUrl, cancel: true });
+
+// Next.js Pages Router
+router.events.on("routeChangeStart", () => api.cancel());
+
+// Vue Router
+router.beforeEach((to, from, next) => {
+  if (to.path !== from.path) api.cancel();
+  next();
+});
+
+// Or narrow it to one screen's endpoints
+api.cancel("/api/v1/products");
+```
+
+---
+
+## A modal that cleans up after itself
+
+```tsx
+function ProductModal({ id, onClose }: { id: string; onClose: () => void }) {
+  const scope = useMemo(() => api.cancelScope(`product-${id}`), [id]);
+
+  // everything the modal started dies with it
+  useEffect(() => () => scope.cancel(), [scope]);
+
+  useEffect(() => {
+    scope.get<Product>(`/api/v1/products/${id}`).then(setProduct).catch(skipCanceled);
+    scope.get<Review[]>(`/api/v1/products/${id}/reviews`).then(setReviews).catch(skipCanceled);
+  }, [scope, id]);
+}
+
+const skipCanceled = (e: unknown) => {
+  if (e instanceof ApiError && e.canceled) return;
+  throw e;
+};
+```
+
+See **[[Cancellation]]** for the full guide.
 
 ---
 

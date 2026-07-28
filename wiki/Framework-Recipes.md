@@ -149,7 +149,7 @@ export function useApi<R>(fn: (signal: AbortSignal) => Promise<IRes<R>>, deps: u
     fn(controller.signal)
       .then((res) => setData(res.data))
       .catch((e) => {
-        if (e instanceof ApiError && e.statusCode === 0) return; // aborted
+        if (e instanceof ApiError && e.canceled) return; // unmounted
         setError(e as ApiError);
       })
       .finally(() => setLoading(false));
@@ -164,6 +164,90 @@ export function useApi<R>(fn: (signal: AbortSignal) => Promise<IRes<R>>, deps: u
 // usage
 const { data, error, loading } = useApi((signal) => api.get<User[]>("/users", { signal }));
 ```
+
+---
+
+## Cancelling on navigation and unmount
+
+Enable cancellation once on the client:
+
+```ts
+export const api = createClient({ baseUrl, cancel: true });
+```
+
+**React — a scope per component.** Everything it started dies with it, no controller to thread through:
+
+```tsx
+function ProductPanel({ id }: { id: string }) {
+  const scope = useMemo(() => api.cancelScope(`product-${id}`), [id]);
+  useEffect(() => () => scope.cancel(), [scope]);
+
+  useEffect(() => {
+    scope.get<Product>(`/api/v1/products/${id}`).then(setProduct).catch(skipCanceled);
+  }, [scope, id]);
+}
+
+const skipCanceled = (e: unknown) => {
+  if (e instanceof ApiError && e.canceled) return;
+  throw e;
+};
+```
+
+**Next.js App Router:**
+
+```tsx
+"use client";
+const pathname = usePathname();
+useEffect(() => () => api.cancel(), [pathname]);
+```
+
+**Next.js Pages Router:**
+
+```ts
+router.events.on("routeChangeStart", () => api.cancel());
+```
+
+**Vue:**
+
+```ts
+const scope = api.cancelScope("product-detail");
+onUnmounted(() => scope.cancel());
+```
+
+**Vue Router:**
+
+```ts
+router.beforeEach((to, from, next) => {
+  if (to.path !== from.path) api.cancel();
+  next();
+});
+```
+
+**Svelte:**
+
+```ts
+import { onDestroy } from "svelte";
+const scope = api.cancelScope("dashboard");
+onDestroy(() => scope.cancel());
+```
+
+**Angular:**
+
+```ts
+@Component({ /* … */ })
+export class ProductComponent implements OnDestroy {
+  private scope = api.cancelScope("product");
+  ngOnDestroy() { this.scope.cancel(); }
+}
+```
+
+**TanStack Query / SWR:** react-query hands your `queryFn` a `signal` — wire it through and it cancels for you. Mutations get no signal and aren't canceled on unmount, so use a scope there.
+
+```ts
+useQuery({ queryKey: ["users"], queryFn: ({ signal }) => api.get<User[]>("/users", { signal }).then(r => r.data) });
+```
+
+Narrow any of these to a single screen's endpoints with a URL pattern — `api.cancel("/api/v1/products")`. Full recipes for every framework, plus the react-query and SWR specifics: **[[Cancellation]]**.
 
 ---
 

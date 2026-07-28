@@ -33,7 +33,8 @@ Codes below come from the client, not the server:
 
 | `statusCode` | `message` | Cause |
 |---|---|---|
-| `0` | `"Request aborted"` | Your `AbortSignal` fired, or `destroy()` was called |
+| `0` | `"Request aborted"` | Your `AbortSignal` fired, or `destroy()` was called. Sets `canceled: true` |
+| `0` | `"Request canceled: …"` | `cancel()` stopped it. Sets `canceled: true` and `cancelReason` |
 | `0` | `"Network request failed"` | Offline, DNS failure, CORS rejection, bad URL |
 | `0` | (stream/worker message) | A `ReadableStream` body was sent to a worker client |
 | `408` | `"Request timed out"` | The per-attempt timeout elapsed |
@@ -218,20 +219,44 @@ export function describe(error: unknown): string {
 
 ---
 
-## Distinguishing abort from timeout
+## Distinguishing cancellation from timeout
 
-Both are "the request didn't finish", but they need different UI:
+Both are "the request didn't finish", but they need different UI — and they settle differently.
+
+A **cancellation resolves**, even under `throwError: true`, because it is not a failure:
+
+```ts
+const res = await api.get("/report", { signal, timeout: 5_000 });
+if (res.canceled) return;                          // deliberate — say nothing
+```
+
+A **timeout** is a real failure, so it throws (or returns `408` in envelope style):
 
 ```ts
 try {
-  await api.get("/report", { signal, timeout: 5_000 });
+  await api.get("/report", { timeout: 5_000 });
 } catch (e) {
-  if (e instanceof ApiError) {
-    if (e.statusCode === 408) return toast("Timed out — try again");
-    if (e.statusCode === 0 && e.message === "Request aborted") return; // user navigated away
-  }
+  if (e instanceof ApiError && e.statusCode === 408) toast("Timed out — try again");
 }
 ```
+
+`canceled` is `true` for your own `AbortSignal`, for `cancel()`, for a `takeLatest` supersession and for `destroy()`. A timeout leaves it unset and keeps `408`. With `throwOnCancel: true` a cancellation rejects instead, still carrying `e.canceled`.
+
+`cancelReason` carries the string you passed to `cancel()`, when you passed one:
+
+```ts
+api.cancel("/api/v1/products", "left the page");
+// → e.cancelReason === "left the page"
+```
+
+In the envelope style the same fields are on the result:
+
+```ts
+const res = await api.get("/report", { throwError: false });
+if (res.canceled) return;
+```
+
+> `onError` is **never** called for a canceled request — a route change should not raise an error toast. See **[[Cancellation]]**.
 
 ---
 

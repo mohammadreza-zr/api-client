@@ -1,32 +1,105 @@
 # @mrzr/api-client
 
-A typed REST client built on `fetch` with **zero runtime dependencies**.
+**The HTTP layer under TanStack Query, SWR and Vue Query — it handles authentication so they don't have to.**
 
-Automatic token refresh, Web Worker isolation so tokens never touch the main thread, and cross-tab auth sync — in one `createClient()` call that works the same everywhere.
+A TypeScript-first API client focused on secure browser auth: coalesced token refresh, Web Worker token isolation, and cross-tab session sync. Zero runtime dependencies, works in every JS runtime.
 
 ```bash
 npm install @mrzr/api-client
 ```
 
-- **Zero dependencies** — nothing but the platform `fetch`
-- **Runs anywhere** — React, Vue, Svelte, Angular, Next.js, Nuxt, SvelteKit, plain `<script>`, Node, SSR/SSG/SPA
-- **One request engine** — the worker and main thread run the *same* code, so behaviour can never drift
-- **Concurrency-safe refresh** — 50 simultaneous 401s trigger exactly **one** refresh call
-- **Drop-in for TanStack Query / SWR** — failures reject with a typed `ApiError`, or switch to a never-throwing envelope with one flag
-- **Real upload support** — `FormData`, `File`, `Blob`, typed arrays and streams, with token refresh handled mid-upload
-- **CSRF double-submit** built in, for cookie auth
-- **~10 KB** min+gzip, tree-shakeable, ESM + CJS + full types
+```ts
+import { createClient } from "@mrzr/api-client";
+
+export const api = createClient({ baseUrl: "https://api.example.com" });
+
+// Tokens are captured, stored, refreshed and rotated across tabs for you.
+await api.login({ email, password });
+const { data } = await api.get<User[]>("/users");
+```
+
+---
+
+## Is this for you?
+
+Most HTTP clients treat auth as something you bolt on with interceptors. This one treats it as the product.
+
+**Use it if** any of these are real problems for you:
+
+- Your access token expires and 20 concurrent requests each fire their own refresh
+- You want tokens off the main thread, where XSS can't read them
+- Logging out in one tab should log out the others
+- You use httpOnly cookies and can't tell on page load whether a session exists
+- You need refresh to work *during* a five-minute file upload
+
+**Use something else if not.** If you just want a small `fetch` wrapper, [**ky**](https://github.com/sindresorhus/ky) is excellent — a third of the size, built-in retry, and a lovely API. If you need broad legacy support and the biggest ecosystem, use axios. Neither is trying to solve browser auth, and this isn't trying to out-ky ky.
+
+---
+
+## How it compares
+
+Verified, including the rows where this library loses.
+
+| | axios | ky | @mrzr/api-client |
+|---|---|---|---|
+| Zero runtime dependencies | ✗ | ✓ | ✓ |
+| Bundle, min+gzip | ~14 KB | **~4 KB** | 13.4 KB |
+| Built on | XHR / node:http | fetch | fetch |
+| Retry with backoff | via `axios-retry` | **✓ built in** | ✗ *(not yet)* |
+| Interceptors / hooks | **✓ global** | **✓ global** | per-request transforms |
+| **Coalesced token refresh** | build it yourself | build it yourself | **✓ built in** |
+| **Web Worker token isolation** | ✗ | ✗ | **✓** |
+| **Cross-tab auth sync** | ✗ | ✗ | **✓** |
+| **httpOnly cookie session restore** | ✗ | ✗ | **✓** |
+| **Cancel by URL pattern / scope** | ✗ | ✗ | **✓** |
+| CSRF double-submit | partial | ✗ | ✓ |
+
+Two honest notes on that table:
+
+- **Size.** 13.4 KB is axios-territory and 3× ky. About 3.8 KB of it is the inlined worker, which ships even when you pass `worker: false` — a runtime flag can't be tree-shaken away. Worth knowing before you install.
+- **Retry.** Not implemented. It has to interact correctly with refresh-and-retry, cancellation and `takeLatest`, and shipping it half-right would be worse than not shipping it.
+
+---
+
+## What it actually does
+
+- **Coalesced refresh** — 50 simultaneous 401s trigger exactly **one** refresh call. A shared promise, not a polling loop
+- **Web Worker isolation** — requests run in a worker by default, so tokens never enter the main-thread heap. Self-disables on the server or where `Worker` is missing
+- **Cross-tab sync** — login, logout and refresh propagate over `BroadcastChannel`, with leader election so one tab drives
+- **httpOnly cookie mode** — including `restoreSession()`, which answers the "am I logged in?" question that cookies make unanswerable from JS
+- **Opt-in cancellation** — cancel by URL pattern, scope or key on page change or modal close; real aborts, worker mode included
+- **Real upload support** — `FormData`, `File`, `Blob`, typed arrays and streams, with refresh handled mid-upload
+- **CSRF double-submit** — built in, for cookie auth
+- **One request engine** — the worker and main thread run the *same* compiled code, so behaviour can't drift between modes
+- **Runs anywhere** — React, Vue, Svelte, Angular, Next.js, Nuxt, SvelteKit, plain `<script>`, Node 20+, Deno, Bun, Cloudflare Workers
+
+---
+
+## Works with your data library
+
+It sits *under* TanStack Query, SWR or Vue Query — it doesn't replace them.
+
+```ts
+useQuery({
+  queryKey: ["users"],
+  queryFn: ({ signal }) => api.get<User[]>("/users", { signal }).then((r) => r.data),
+});
+```
+
+Failures reject with a typed `ApiError`, which is what Query and SWR need to mark a request failed. Cancellation resolves instead, flagged with `canceled: true`, so a route change never looks like an error.
+
+---
 
 ---
 
 ## 📚 Documentation
 
-Full documentation lives in the **[Wiki](https://github.com/mohammadreza-zr/api-client/wiki)** — 25 pages covering every feature in depth.
+Full documentation lives in the **[Wiki](https://github.com/mohammadreza-zr/api-client/wiki)** — 26 pages covering every feature in depth.
 
 | | |
 |---|---|
 | **Start here** | [Installation](https://github.com/mohammadreza-zr/api-client/wiki/Installation) · [Quick Start](https://github.com/mohammadreza-zr/api-client/wiki/Quick-Start) · [Core Concepts](https://github.com/mohammadreza-zr/api-client/wiki/Core-Concepts) |
-| **Requests** | [Requests](https://github.com/mohammadreza-zr/api-client/wiki/Requests) · [Request Config](https://github.com/mohammadreza-zr/api-client/wiki/Request-Config) · [Responses & Errors](https://github.com/mohammadreza-zr/api-client/wiki/Responses-and-Errors) · [Uploads](https://github.com/mohammadreza-zr/api-client/wiki/Uploads-and-Binary-Bodies) |
+| **Requests** | [Requests](https://github.com/mohammadreza-zr/api-client/wiki/Requests) · [Request Config](https://github.com/mohammadreza-zr/api-client/wiki/Request-Config) · [Cancellation](https://github.com/mohammadreza-zr/api-client/wiki/Cancellation) · [Responses & Errors](https://github.com/mohammadreza-zr/api-client/wiki/Responses-and-Errors) · [Uploads](https://github.com/mohammadreza-zr/api-client/wiki/Uploads-and-Binary-Bodies) |
 | **Auth** | [Authentication](https://github.com/mohammadreza-zr/api-client/wiki/Authentication) · [Token Refresh](https://github.com/mohammadreza-zr/api-client/wiki/Token-Refresh) · [Storage](https://github.com/mohammadreza-zr/api-client/wiki/Storage-Adapters) · [CSRF](https://github.com/mohammadreza-zr/api-client/wiki/CSRF-Protection) |
 | **Advanced** | [Worker Isolation](https://github.com/mohammadreza-zr/api-client/wiki/Web-Worker-Isolation) · [Multi-Tab Sync](https://github.com/mohammadreza-zr/api-client/wiki/Multi-Tab-Sync) · [Logging](https://github.com/mohammadreza-zr/api-client/wiki/Logging-and-Observability) · [Security Model](https://github.com/mohammadreza-zr/api-client/wiki/Security-Model) |
 | **Reference** | [Client Options](https://github.com/mohammadreza-zr/api-client/wiki/Client-Options) · [API Reference](https://github.com/mohammadreza-zr/api-client/wiki/API-Reference) · [TypeScript Types](https://github.com/mohammadreza-zr/api-client/wiki/TypeScript-Types) |
@@ -243,6 +316,10 @@ await api.get<User>("/users/{id}", {
   duplex: "half",                       // for ReadableStream bodies (set automatically)
   log: true,                            // emit a structured log entry
   signal: controller.signal,            // your own AbortSignal — always honoured
+  cancelable: true,                     // track it so api.cancel() can stop it
+  cancelKey: "product-detail",           // a stable identity to cancel by name
+  cancelGroup: "product-modal",          // a tag for bulk cancellation
+  takeLatest: true,                     // supersede the previous request with this identity
   beforeFunc: (body) => body,           // transform outgoing body
   afterFunc: (data) => data,            // transform incoming data
 });
@@ -302,6 +379,104 @@ Streams are single-use by nature, so prefer `uploadSkewMs` when streaming. Note 
 
 ---
 
+## Cancelling requests
+
+Stop in-flight requests when the user changes page, closes a modal, or types the next keystroke.
+
+Cancellation is **opt-in** — nothing is tracked, and there's no bookkeeping cost, until you ask:
+
+```ts
+const api = createClient({ baseUrl, cancel: true });
+
+// on route change — drop everything the old page started
+router.events.on("routeChangeStart", () => api.cancel());
+```
+
+### Cancel by URL pattern
+
+```ts
+api.cancel();                      // everything in flight
+api.cancel("/api/v1/products");    // just this screen's requests
+```
+
+Patterns are **segment-aware prefixes**, so one line covers a whole subtree without catching its neighbours:
+
+| Pattern | Matches | Does **not** match |
+|---|---|---|
+| `/api/v1/products` | `/api/v1/products`, `/api/v1/products/12`, `/api/v1/products/12/reviews` | `/api/v1/products-archive` |
+| `/api/v1/products$` | `/api/v1/products` | `/api/v1/products/12` |
+| `/users/:id`, `/users/*` | `/users/7`, `/users/7/posts` | `/users`, `/orgs/7` |
+| `/users/:id$` | `/users/7` | `/users/7/posts` |
+| `/api/**/images` | `/api/images`, `/api/a/b/images` | `/other/images` |
+
+Also accepted: a `RegExp`, an object (`{ url, method, key, group }`), or a predicate.
+
+### Cancel by scope — modals and widgets
+
+```ts
+const scope = api.cancelScope("product-modal");
+
+await scope.get("/api/v1/products/12");
+await scope.get("/api/v1/products/12/reviews");
+
+scope.cancel();   // when the modal closes
+```
+
+Scopes are self-enabling: requests made through one are cancelable even on a client that never set `cancel`.
+
+### Cancel stale searches
+
+```ts
+await api.get("/search", { params: { q }, cancelKey: "search", takeLatest: true });
+```
+
+Each keystroke retires the previous request with the same key, so a fast typist can never be shown an older result.
+
+### What you get back
+
+A cancellation **resolves** — even under the default `throwError: true` — so the guard is one line and there's no `try`/`catch`:
+
+```ts
+const res = await api.get("/api/v1/products");
+if (res.canceled) return;        // superseded or unmounted — not a failure
+setProducts(res.data);
+```
+
+```ts
+{ statusCode: 0, status: false, canceled: true, cancelReason: "left the page", … }
+```
+
+- **Cancellation never throws by default.** `throwOnCancel` is independent of `throwError`: real failures still reject. Rejecting a cancel makes TanStack Query **retry the request you just canceled** (measured: 2 server hits vs 1), and turns the ordinary `useEffect` async pattern into an unhandled rejection. Opt back in with `throwOnCancel: true`
+- `onError` **never** fires for a cancellation — navigating away shouldn't raise a toast
+- A timeout stays distinct: `408`, with `canceled` unset
+- Only `GET` is tracked by default. A canceled write may already have been committed by the server, so writes opt in with `cancelable: true` or `cancel: { methods: "all" }`
+- `login()`, `logout()` and the `restoreSession()` probe are never tracked, so a blanket `cancel()` can't abort the auth handshake
+- Works identically in worker mode — the real `fetch` stops and the socket closes
+
+```ts
+api.pending();                  // inspect what's in flight
+api.cancel("/x", "reason");     // returns how many it stopped
+```
+
+### With TanStack Query / SWR
+
+Whoever owns the request lifecycle should own its cancellation. React Query hands your `queryFn` a `signal` — wire it through and it cancels on unmount and key change:
+
+```ts
+useQuery({
+  queryKey: ["users"],
+  queryFn: ({ signal }) => api.get<User[]>("/users", { signal }).then((r) => r.data),
+});
+```
+
+`api.cancel()` still works on those requests, it's just rarely the better tool — react-query can't see it, so it caches the canceled envelope as success and may retry. Cancel a group with `queryClient.cancelQueries({ queryKey: ["product"] })` instead.
+
+Mutations are the exception: react-query gives them **no** signal and doesn't cancel them on unmount, so a `cancelScope` is the right answer there. SWR likewise has no signal.
+
+Full guide, with copy-paste recipes for React, Next, Vue, Svelte, Angular, TanStack Query and SWR: **[Cancellation](https://github.com/mohammadreza-zr/api-client/wiki/Cancellation)**.
+
+---
+
 ## Client options
 
 | Option | Default | Description |
@@ -315,6 +490,7 @@ Streams are single-use by nature, so prefer `uploadSkewMs` when streaming. Note 
 | `getCsrfToken` | – | Supplies the CSRF token directly. Required in worker mode |
 | `authMode` | `"header"` | `"header"` or `"cookie"` |
 | `credentials` | per mode | `"same-origin"`, or `"include"` in cookie mode |
+| `cancel` | `false` | Opt in to cancellation. `true`, or `{ methods, throwOnCancel, takeLatest }` |
 | `worker` | `true` | Run requests in a Web Worker |
 | `multiTab` | `true` | Sync auth across tabs |
 | `storage` | `"memory"` | `"memory" \| "local" \| "session" \| "cookie"`, or your own adapter |
@@ -492,6 +668,11 @@ api.refresh()                    // force a refresh; null on failure
 api.getAuthState()               // { isAuthenticated, expiresAt, user }
 api.restoreSession("/api/auth/me") // cookie mode: detect an existing session on boot
 api.onAuthStateChange(listener)  // returns unsubscribe
+
+api.cancel(selector?, reason?)   // cancel in-flight requests; returns how many
+api.pending(selector?)           // inspect what's in flight
+api.cancelScope("modal")         // a wrapper whose requests cancel together
+
 api.isWorker                     // whether requests run in a worker
 api.destroy()                    // terminate worker + close channel
 ```

@@ -8,7 +8,7 @@ Because the boring parts are always rewritten by hand. Token refresh with proper
 
 ### How big is it?
 
-~10 KB min+gzip for the full bundle, including the inlined worker. It's `sideEffects: false`, so importing only `buildQueryString` pulls in almost nothing.
+~13 KB min+gzip for the full bundle, including the inlined worker. It's `sideEffects: false`, so importing only `buildQueryString` pulls in almost nothing (~0.4 KB).
 
 ### Does it work without a bundler?
 
@@ -23,6 +23,17 @@ Yes:
 ### Does it work in Node / Deno / Bun / Cloudflare Workers?
 
 Yes — anything with `fetch` and `AbortController`. Worker isolation and tab sync self-disable there.
+
+### How do I cancel requests when the user changes page?
+
+Enable cancellation once, then call `cancel()`:
+
+```ts
+const api = createClient({ baseUrl, cancel: true });
+router.on("navigate", () => api.cancel());
+```
+
+Narrow it with a URL pattern (`api.cancel("/api/v1/products")`), a `cancelScope` for a modal, or `takeLatest` for a search box. It is opt-in, and covers `GET` only unless you widen `methods` — a canceled write may already have been committed by the server. See **[[Cancellation]]**.
 
 ### Do I need to configure the Web Worker?
 

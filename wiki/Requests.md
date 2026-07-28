@@ -200,25 +200,48 @@ A timeout produces `statusCode: 408` with message `"Request timed out"` (or an `
 
 ## Cancellation
 
-Pass your own `AbortSignal`; it is combined with the internal timeout signal (via `AbortSignal.any` where available, with a manual fallback otherwise).
+Two ways, and they compose.
+
+**Your own `AbortSignal`** — combined with the internal timeout signal (via `AbortSignal.any` where available, with a manual fallback otherwise):
 
 ```ts
 const controller = new AbortController();
-const promise = api.get("/search", {
-  params: { q },
-  signal: controller.signal,
-});
+const promise = api.get("/search", { params: { q }, signal: controller.signal });
 
-controller.abort(); // → statusCode 0, message "Request aborted"
+controller.abort(); // → statusCode 0, canceled: true, "Request aborted"
 ```
 
-In worker mode, aborting posts an `abort` message to the worker, which aborts the real `fetch` — cancellation is not merely cosmetic.
+**The built-in registry** — opt in once, then cancel by URL pattern, scope or key, with no controller to carry around:
+
+```ts
+const api = createClient({ baseUrl, cancel: true });
+
+api.cancel();                     // everything in flight
+api.cancel("/api/v1/products");   // the product screen's requests
+api.cancel("search");             // by cancelKey or cancelGroup
+```
+
+```ts
+// modals and widgets
+const scope = api.cancelScope("product-modal");
+await scope.get("/api/v1/products/12");
+scope.cancel();
+
+// stale searches
+await api.get("/search", { params: { q }, cancelKey: "search", takeLatest: true });
+```
+
+Both paths set `canceled: true` and **resolve** rather than reject — even under the default `throwError: true` — so check `res.canceled` before using `res.data`. Neither fires `onError`: navigating away is not a failure the user should see. A timeout stays distinct at `408`, and still throws.
+
+In worker mode, cancelling posts an `abort` message to the worker, which aborts the real `fetch` — cancellation is not merely cosmetic.
 
 React Query's `queryFn` receives a `signal`; wire it straight through:
 
 ```ts
 queryFn: ({ signal }) => api.get<User[]>("/users", { signal }),
 ```
+
+Full guide: **[[Cancellation]]**.
 
 ---
 

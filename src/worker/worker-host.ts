@@ -1,13 +1,26 @@
 import type {
   AuthState,
+  CancelSelector,
   ClientOptions,
   HttpMethod,
   IRes,
+  PendingRequest,
   RequestConfig,
   TokenPair,
   TokenStorage,
 } from "../types";
 import type { HostMessage, SerializableConfig, SerializableOptions, WorkerMessage } from "./protocol";
+import {
+  CancelRegistry,
+  cancelMessage,
+  groupsOf,
+  isCancelable,
+  linkSignals,
+  previewUrl,
+  reasonOf,
+  resolveCancelDefaults,
+  type CancelDefaults,
+} from "../internal/cancel";
 import { detectBaseUrl } from "../internal/env";
 import { resolveStorage } from "../internal/storage";
 import { WORKER_SOURCE } from "./worker-source";
@@ -23,7 +36,8 @@ export class WorkerHost {
   private worker: Worker;
   private objectUrl: string | null = null;
   private seq = 0;
-  private pending = new Map<
+  /** In-flight RPC calls awaiting a worker reply, keyed by message id. */
+  private calls = new Map<
     number,
     { resolve: (value: never) => void; reject: (error: Error) => void }
   >();
@@ -36,8 +50,22 @@ export class WorkerHost {
   private csrfProvider?: () => string | undefined;
   /** Main-thread storage the worker persists through. `null` for memory. */
   private storage: TokenStorage | null = null;
+  /**
+   * The cancel registry lives here, not in the worker.
+   *
+   * `api.cancel()` has to be synchronous and has to work before the worker has
+   * even finished booting, so the host tracks requests and translates a
+   * cancellation into the `abort` message the worker already understands.
+   */
+  private cancelDefaults: CancelDefaults;
+  private registry = new CancelRegistry();
+  /** Maps a registry entry to the in-flight worker request id. */
+  private workerIds = new Map<number, number>();
+  private baseUrl: string;
 
   constructor(options: ClientOptions) {
+    this.cancelDefaults = resolveCancelDefaults(options.cancel);
+    this.baseUrl = (options.baseUrl ?? (detectBaseUrl() || pageOrigin())).replace(/\/+$/, "");
     this.hooks = {
       onAuthStateChanged: options.onAuthStateChanged,
       onAuthFailure: options.onAuthFailure,
@@ -71,8 +99,8 @@ export class WorkerHost {
     this.worker.onmessage = (event: MessageEvent<WorkerMessage>) => this.receive(event.data);
     this.worker.onerror = (event) => {
       const error = new Error(event.message || "Worker crashed");
-      for (const [, entry] of this.pending) entry.reject(error);
-      this.pending.clear();
+      for (const [, entry] of this.calls) entry.reject(error);
+      this.calls.clear();
     };
 
     this.ready = new Promise<void>((resolve) => {
@@ -101,9 +129,9 @@ export class WorkerHost {
       case "refreshed":
       case "void": {
         const id = (msg as { id: number }).id;
-        const entry = this.pending.get(id);
+        const entry = this.calls.get(id);
         if (!entry) return;
-        this.pending.delete(id);
+        this.calls.delete(id);
         if (msg.kind === "result") entry.resolve(msg.result as never);
         else if (msg.kind === "authState") entry.resolve(msg.state as never);
         else if (msg.kind === "refreshed") entry.resolve(msg.ok as never);
@@ -112,9 +140,9 @@ export class WorkerHost {
       }
 
       case "failure": {
-        const entry = this.pending.get(msg.id);
+        const entry = this.calls.get(msg.id);
         if (!entry) return;
-        this.pending.delete(msg.id);
+        this.calls.delete(msg.id);
         entry.reject(new Error(msg.message));
         break;
       }
@@ -179,23 +207,29 @@ export class WorkerHost {
     }
   }
 
-  private async call<T>(build: (id: number) => HostMessage, signal?: AbortSignal | null): Promise<T> {
+  private async call<T>(
+    build: (id: number) => HostMessage,
+    signal?: AbortSignal | null,
+    onId?: (id: number) => void,
+  ): Promise<T> {
     await this.ready;
     const id = ++this.seq;
+    onId?.(id);
 
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as never, reject });
+      this.calls.set(id, { resolve: resolve as never, reject });
 
       if (signal) {
         if (signal.aborted) {
-          this.pending.delete(id);
-          reject(new DOMException("Aborted", "AbortError"));
+          this.calls.delete(id);
+          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
           return;
         }
         signal.addEventListener(
           "abort",
           () => {
-            this.dispatch({ kind: "abort", id });
+            // Forward the reason so the worker's engine can report it.
+            this.dispatch({ kind: "abort", id, reason: reasonOf(signal.reason) });
           },
           { once: true },
         );
@@ -268,20 +302,58 @@ export class WorkerHost {
       }
     }
 
+    /*
+     * Track on the host, abort in the worker.
+     *
+     * The registry cannot live in the worker: `api.cancel()` is synchronous
+     * and may fire before the worker has finished booting. So the host owns
+     * the bookkeeping, and a cancellation becomes the `abort` message the
+     * worker already handles — the real `fetch` genuinely stops.
+     */
+    const tracked = isCancelable(method, config as RequestConfig<unknown> | undefined, this.cancelDefaults)
+      ? this.registry.track({
+          method,
+          url: previewUrl(url, this.baseUrl, config as RequestConfig<unknown> | undefined),
+          key: config?.cancelKey,
+          groups: groupsOf(config as RequestConfig<unknown> | undefined),
+          takeLatest: config?.takeLatest ?? this.cancelDefaults.takeLatest,
+        })
+      : undefined;
+
+    // Merge the caller's signal with the registry's, so either can stop it.
+    const { signal: linked, release } = linkSignals([signal, tracked?.signal]);
+
     let result: IRes<R>;
     try {
       result = await this.call<IRes<R>>(
         (id) => ({ kind: "request", id, method, url, body: payload, config: forwarded }),
-        signal,
+        signal || tracked ? linked : undefined,
+        (id) => {
+          if (tracked) this.workerIds.set(tracked.id, id);
+        },
       );
     } catch (error) {
+      const canceled = (error as Error)?.name === "AbortError";
       result = {
-        statusCode: (error as Error)?.name === "AbortError" ? 0 : 500,
+        statusCode: canceled ? 0 : 500,
         status: false,
-        message: (error as Error)?.message ?? "Worker request failed",
+        message: canceled
+          ? cancelMessage(error)
+          : ((error as Error)?.message ?? "Worker request failed"),
         loading: false,
         error,
       };
+      if (canceled) {
+        result.canceled = true;
+        const reason = reasonOf(error);
+        if (reason) result.cancelReason = reason;
+      }
+    } finally {
+      release();
+      if (tracked) {
+        this.workerIds.delete(tracked.id);
+        tracked.release();
+      }
     }
 
     // Re-apply the transforms the structured-clone boundary could not carry.
@@ -292,11 +364,29 @@ export class WorkerHost {
       result.data = data as R;
     }
 
-    if (!result.status && !config?.hideErrorMessage) {
+    // A cancellation is deliberate, so it must not raise the error toast.
+    if (!result.status && !result.canceled && !config?.hideErrorMessage) {
       this.hooks.onError?.(result);
     }
 
     return result;
+  }
+
+  // ── cancellation ───────────────────────────────────────
+
+  /** Cancels matching in-flight requests. Returns how many were stopped. */
+  cancel(selector?: CancelSelector, reason?: string): number {
+    return this.registry.cancel(selector, reason);
+  }
+
+  /** The cancelable requests currently in flight. */
+  pending(selector?: CancelSelector): PendingRequest[] {
+    return this.registry.pending(selector);
+  }
+
+  /** Whether a canceled request should reject. Independent of `throwError`. */
+  shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean {
+    return config?.throwOnCancel ?? this.cancelDefaults.throwOnCancel;
   }
 
   get<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>> {
@@ -359,9 +449,11 @@ export class WorkerHost {
     } catch {
       /* already gone */
     }
+    this.registry.cancel(undefined, "client destroyed");
+    this.workerIds.clear();
     this.worker.terminate();
-    for (const [, entry] of this.pending) entry.reject(new Error("Client destroyed"));
-    this.pending.clear();
+    for (const [, entry] of this.calls) entry.reject(new Error("Client destroyed"));
+    this.calls.clear();
     this.listeners.clear();
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
     this.objectUrl = null;
@@ -394,6 +486,8 @@ function toSerializableOptions(options: ClientOptions): SerializableOptions {
     // A function cannot be structured-cloned; the host resolves the token and
     // forwards the resulting string with each request instead.
     getCsrfToken: _f,
+    // Cancellation is tracked on the host, which forwards `abort` messages.
+    cancel: _g,
     ...rest
   } = options;
 
@@ -433,7 +527,20 @@ function splitConfig<R>(config?: RequestConfig<R>): {
 } {
   if (!config) return {};
 
-  const { beforeFunc, afterFunc, beforeSelectOptions, signal, ...rest } = config;
+  const {
+    beforeFunc,
+    afterFunc,
+    beforeSelectOptions,
+    signal,
+    // Cancellation metadata stays on the host: it drives the registry here,
+    // and the worker only ever needs the resulting `abort` message.
+    cancelable: _cancelable,
+    cancelKey: _cancelKey,
+    cancelGroup: _cancelGroup,
+    takeLatest: _takeLatest,
+    throwOnCancel: _throwOnCancel,
+    ...rest
+  } = config;
 
   return {
     serializable: rest as SerializableConfig,

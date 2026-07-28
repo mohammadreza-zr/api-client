@@ -12,6 +12,10 @@ export { ApiError } from "./types";
 export type {
   AuthMode,
   AuthState,
+  CancelMatch,
+  CancelOptions,
+  CancelScope,
+  CancelSelector,
   ClientOptions,
   HttpMethod,
   IRes,
@@ -19,6 +23,7 @@ export type {
   LogEntry,
   Ordering,
   Params,
+  PendingRequest,
   RequestConfig,
   StorageKind,
   TokenExtractor,
