@@ -60,16 +60,51 @@ Remember the budget is per attempt — a 401 + retry can take twice as long in w
 
 ---
 
-### `Request aborted` (`statusCode: 0`)
+### `Request aborted` / `Request canceled: …` (`statusCode: 0`)
 
-Your `AbortSignal` fired, or `destroy()` was called. Usually intentional (navigation, a superseded search). Filter it out:
+The request was canceled: your `AbortSignal` fired, `cancel()` matched it, `takeLatest` superseded it, or `destroy()` was called. Usually intentional. Filter it out with the flag:
 
 ```ts
 catch (e) {
-  if (e instanceof ApiError && e.statusCode === 0 && e.message === "Request aborted") return;
+  if (e instanceof ApiError && e.canceled) return;
   throw e;
 }
 ```
+
+`e.cancelReason` tells you which `cancel()` call did it, when a reason was given. `onError` is never fired for these.
+
+---
+
+### `cancel()` returns `0` and nothing stops
+
+Cancellation is opt-in, and only tracked requests can be canceled. Check, in order:
+
+1. **The client never enabled it.** `createClient({ cancel: true })`, or use a `cancelScope`, which enables itself.
+2. **It's a write.** Only `GET` is tracked by default. Pass `cancelable: true`, or `cancel: { methods: "all" }`.
+3. **The request isn't in flight yet.** `await`ing a slow `await` before firing? Check `api.pending()` to see what's actually tracked.
+4. **The pattern doesn't match.** Patterns are segment-aware, so `/api/products` does **not** match `/api/products-archive`. Print `api.pending()` and compare against `path`, which is what patterns match — no origin, no query.
+
+```ts
+console.log(api.pending().map((r) => `${r.method} ${r.path}`));
+```
+
+---
+
+### A canceled request throws when I don't want it to
+
+`throwOnCancel` follows `throwError`, so a throwing client throws on cancel too. Split them:
+
+```ts
+createClient({ cancel: { throwOnCancel: false } });   // errors throw, cancels resolve
+```
+
+Keep the default with TanStack Query and SWR — they only recognise failure through a rejected promise.
+
+---
+
+### A canceled write left the server in a half-applied state
+
+That is exactly why writes are not cancelable by default. Once the request is on the wire the server may commit it, and the client will never learn the outcome. If you opt a write in with `cancelable: true`, make the endpoint idempotent or reconcile on the next load.
 
 ---
 

@@ -113,7 +113,24 @@ source.cancel();
 const controller = new AbortController();
 api.get("/users", { signal: controller.signal });
 controller.abort();
+
+// …or the built-in registry, with no controller to carry around
+const api = createClient({ baseUrl, cancel: true });
+api.get("/users");
+api.cancel("/users");        // by URL pattern, key or group
+api.cancel();                // everything in flight
 ```
+
+Closer to axios's `source.cancel()` for a group of requests: a scope.
+
+```ts
+const scope = api.cancelScope("users-page");
+scope.get("/users");
+scope.get("/users/roles");
+scope.cancel();
+```
+
+See **[[Cancellation]]**.
 
 ### Query params
 
@@ -163,7 +180,9 @@ api.get("/users", { throwError: false });
 | `xsrfHeaderName` | `xsrfHeaderName` (same name) |
 | `paramsSerializer` | built in |
 | `validateStatus` | `throwError` |
-| `cancelToken` | `signal` |
+| `cancelToken` | `signal`, or the `cancel` option + `api.cancel()` |
+| `source.cancel()` | `api.cancel(selector)` / `scope.cancel()` |
+| `axios.isCancel(e)` | `e.canceled` |
 | `responseType` | automatic (JSON, text, or undefined) |
 | `maxRedirects` | `redirect` |
 | `transformRequest` | `beforeFunc` |

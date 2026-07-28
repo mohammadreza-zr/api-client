@@ -1,5 +1,92 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Request cancellation** — stop in-flight requests when the user changes
+  page, closes a modal, or types the next keystroke. **Opt-in**: nothing is
+  tracked, and there is no bookkeeping cost, until you set `cancel`.
+
+  ```ts
+  const api = createClient({ baseUrl, cancel: true });
+
+  api.cancel();                     // everything in flight
+  api.cancel("/api/v1/products");   // by URL pattern, cancelKey or cancelGroup
+  ```
+
+  - **URL patterns** are segment-aware prefixes, so `/api/v1/products` covers
+    `/api/v1/products/12/reviews` but never `/api/v1/products-archive`.
+    `*` and `:param` match one segment, `**` matches zero or more, and a
+    trailing `$` makes the match exact. Selectors can also be a `RegExp`, an
+    object (`{ url, method, key, group }`) or a predicate.
+
+  - **`api.cancelScope(name)`** returns a wrapper whose requests are tagged
+    together, so `scope.cancel()` stops everything a modal or page started.
+    Scopes are self-enabling — they work on a client that never set `cancel`.
+
+  - **`takeLatest`** retires the previous in-flight request with the same
+    identity (`cancelKey`, or `METHOD + path`), which is the stale-search
+    pattern built in.
+
+  - **`api.pending(selector?)`** exposes what is currently tracked.
+
+  Only `GET` is covered by default: cancelling a read is always safe, whereas
+  a canceled write may already have been committed by the server and the
+  client would never learn the outcome. Widen it with
+  `cancel: { methods: "all" }`, or opt a single request in or out with
+  `cancelable`.
+
+  Cancellation is genuine in **worker mode** too — the registry lives on the
+  main thread (so `cancel()` stays synchronous and works before the worker has
+  booted) and forwards an `abort` message that stops the real `fetch`.
+
+- **`canceled` and `cancelReason`** on `IRes` and `ApiError`, so a deliberate
+  cancellation is distinguishable from a real failure without string-matching
+  the message. A timeout keeps its own `408` and leaves `canceled` unset.
+
+  ```ts
+  catch (e) {
+    if (e instanceof ApiError && e.canceled) return;   // expected
+    throw e;
+  }
+  ```
+
+- **`throwOnCancel`**, client-wide and per request, for apps that want to
+  reject on real errors but resolve quietly on navigation. It follows
+  `throwError` unless set, so existing behaviour is unchanged.
+
+- New exported types: `CancelOptions`, `CancelSelector`, `CancelMatch`,
+  `CancelScope`, `PendingRequest`.
+
+### Changed
+
+- `onError` is **no longer fired for canceled requests**. A route change
+  should not raise an error toast. Real failures are unaffected.
+
+- `destroy()` now cancels tracked in-flight requests with the reason
+  `"client destroyed"`, instead of leaving them to fail opaquely.
+
+- `login()`, `logout()` and the `restoreSession()` probe are never tracked,
+  even under `cancel: { methods: "all" }`. They establish the session, and a
+  blanket `cancel()` on the first route change would otherwise abort the
+  handshake and leave the app believing nobody is signed in.
+
+### Internal
+
+- Signal linking moved into `src/internal/cancel.ts` and generalized to any
+  number of signals, so the timeout, the caller's `signal` and the registry's
+  controller all compose. The fallback path (runtimes without
+  `AbortSignal.any`) now detaches its listeners when a request settles — a
+  long-lived scope controller would otherwise accumulate one per request it
+  ever covered.
+
+- Two new verification suites, **167 assertions**: `cancel.mjs` and
+  `cancel-worker.mjs`, the latter driving the real inlined worker bundle
+  through the real host protocol and asserting the server actually observes
+  the aborted socket. Every row of the documented URL-pattern table is
+  asserted, so the docs cannot drift from the matcher. 455 assertions total.
+
 ## 1.0.2
 
 First release exercised against a real application. Every fix below is a bug

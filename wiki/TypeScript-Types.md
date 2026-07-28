@@ -30,6 +30,8 @@ interface IRes<R = unknown> {
   errors?: Record<string, string[]>;
   error?: unknown;
   headers?: Record<string, string>;
+  canceled?: boolean;
+  cancelReason?: string;
 }
 ```
 
@@ -63,6 +65,8 @@ class ApiError extends Error {
   readonly errors?: Record<string, string[]>;
   readonly data?: unknown;
   readonly response: IRes<unknown>;
+  readonly canceled: boolean;
+  readonly cancelReason?: string;
 }
 ```
 
@@ -102,6 +106,11 @@ interface RequestConfig<T = unknown>
   uploadSkewMs?: number;
   duplex?: "half";
   log?: boolean;
+  cancelable?: boolean;
+  cancelKey?: string;
+  cancelGroup?: string | string[];
+  takeLatest?: boolean;
+  throwOnCancel?: boolean;
   beforeFunc?: (body: unknown) => unknown;
   afterFunc?: (data: T) => unknown;
   beforeSelectOptions?: (data: T) => unknown;
@@ -117,6 +126,60 @@ await api.get<User[]>("/users", {
   afterFunc: (data) => data.filter(u => u.active), // data: User[]
 });
 ```
+
+---
+
+## Cancellation types
+
+```ts
+interface CancelOptions {
+  methods?: HttpMethod[] | "all";   // default ["GET"]
+  throwOnCancel?: boolean;          // default: follows throwError
+  takeLatest?: boolean;             // default false
+}
+
+interface PendingRequest {
+  id: number;
+  method: HttpMethod;
+  url: string;      // fully resolved, query included
+  path: string;     // no origin, no query — what patterns match
+  key?: string;
+  groups: string[];
+  startedAt: number;
+}
+
+interface CancelMatch {
+  url?: string | RegExp;
+  method?: HttpMethod | HttpMethod[];
+  key?: string;
+  group?: string;
+}
+
+type CancelSelector =
+  | string
+  | RegExp
+  | CancelMatch
+  | ((request: PendingRequest) => boolean);
+
+interface CancelScope {
+  readonly name: string;
+  get<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>>;
+  post<R = unknown>(url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
+  put<R = unknown>(url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
+  patch<R = unknown>(url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
+  delete<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>>;
+  cancel(reason?: string): number;
+  pending(): PendingRequest[];
+}
+```
+
+A predicate selector gets full type inference:
+
+```ts
+api.cancel((r) => r.method === "GET" && r.startedAt < Date.now() - 5_000);
+```
+
+See **[[Cancellation]]**.
 
 ---
 
@@ -247,6 +310,8 @@ interface ClientOptions {
   authMode?: AuthMode;
   credentials?: RequestCredentials;
 
+  cancel?: boolean | CancelOptions;
+
   worker?: boolean;
   multiTab?: boolean;
 
@@ -288,6 +353,10 @@ interface ApiClient {
   refresh(): Promise<string | null>;
   getAuthState(): Promise<AuthState>;
   onAuthStateChange(listener: (state: AuthState) => void): () => void;
+
+  cancel(selector?: CancelSelector, reason?: string): number;
+  pending(selector?: CancelSelector): PendingRequest[];
+  cancelScope(name?: string): CancelScope;
 
   readonly isWorker: boolean;
   destroy(): void;

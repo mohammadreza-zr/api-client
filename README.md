@@ -14,19 +14,20 @@ npm install @mrzr/api-client
 - **Concurrency-safe refresh** — 50 simultaneous 401s trigger exactly **one** refresh call
 - **Drop-in for TanStack Query / SWR** — failures reject with a typed `ApiError`, or switch to a never-throwing envelope with one flag
 - **Real upload support** — `FormData`, `File`, `Blob`, typed arrays and streams, with token refresh handled mid-upload
+- **Opt-in cancellation** — cancel by URL pattern, scope or key on page change or modal close; real aborts, worker mode included
 - **CSRF double-submit** built in, for cookie auth
-- **~10 KB** min+gzip, tree-shakeable, ESM + CJS + full types
+- **~13 KB** min+gzip, tree-shakeable, ESM + CJS + full types
 
 ---
 
 ## 📚 Documentation
 
-Full documentation lives in the **[Wiki](https://github.com/mohammadreza-zr/api-client/wiki)** — 25 pages covering every feature in depth.
+Full documentation lives in the **[Wiki](https://github.com/mohammadreza-zr/api-client/wiki)** — 26 pages covering every feature in depth.
 
 | | |
 |---|---|
 | **Start here** | [Installation](https://github.com/mohammadreza-zr/api-client/wiki/Installation) · [Quick Start](https://github.com/mohammadreza-zr/api-client/wiki/Quick-Start) · [Core Concepts](https://github.com/mohammadreza-zr/api-client/wiki/Core-Concepts) |
-| **Requests** | [Requests](https://github.com/mohammadreza-zr/api-client/wiki/Requests) · [Request Config](https://github.com/mohammadreza-zr/api-client/wiki/Request-Config) · [Responses & Errors](https://github.com/mohammadreza-zr/api-client/wiki/Responses-and-Errors) · [Uploads](https://github.com/mohammadreza-zr/api-client/wiki/Uploads-and-Binary-Bodies) |
+| **Requests** | [Requests](https://github.com/mohammadreza-zr/api-client/wiki/Requests) · [Request Config](https://github.com/mohammadreza-zr/api-client/wiki/Request-Config) · [Cancellation](https://github.com/mohammadreza-zr/api-client/wiki/Cancellation) · [Responses & Errors](https://github.com/mohammadreza-zr/api-client/wiki/Responses-and-Errors) · [Uploads](https://github.com/mohammadreza-zr/api-client/wiki/Uploads-and-Binary-Bodies) |
 | **Auth** | [Authentication](https://github.com/mohammadreza-zr/api-client/wiki/Authentication) · [Token Refresh](https://github.com/mohammadreza-zr/api-client/wiki/Token-Refresh) · [Storage](https://github.com/mohammadreza-zr/api-client/wiki/Storage-Adapters) · [CSRF](https://github.com/mohammadreza-zr/api-client/wiki/CSRF-Protection) |
 | **Advanced** | [Worker Isolation](https://github.com/mohammadreza-zr/api-client/wiki/Web-Worker-Isolation) · [Multi-Tab Sync](https://github.com/mohammadreza-zr/api-client/wiki/Multi-Tab-Sync) · [Logging](https://github.com/mohammadreza-zr/api-client/wiki/Logging-and-Observability) · [Security Model](https://github.com/mohammadreza-zr/api-client/wiki/Security-Model) |
 | **Reference** | [Client Options](https://github.com/mohammadreza-zr/api-client/wiki/Client-Options) · [API Reference](https://github.com/mohammadreza-zr/api-client/wiki/API-Reference) · [TypeScript Types](https://github.com/mohammadreza-zr/api-client/wiki/TypeScript-Types) |
@@ -243,6 +244,10 @@ await api.get<User>("/users/{id}", {
   duplex: "half",                       // for ReadableStream bodies (set automatically)
   log: true,                            // emit a structured log entry
   signal: controller.signal,            // your own AbortSignal — always honoured
+  cancelable: true,                     // track it so api.cancel() can stop it
+  cancelKey: "product-detail",           // a stable identity to cancel by name
+  cancelGroup: "product-modal",          // a tag for bulk cancellation
+  takeLatest: true,                     // supersede the previous request with this identity
   beforeFunc: (body) => body,           // transform outgoing body
   afterFunc: (data) => data,            // transform incoming data
 });
@@ -302,6 +307,89 @@ Streams are single-use by nature, so prefer `uploadSkewMs` when streaming. Note 
 
 ---
 
+## Cancelling requests
+
+Stop in-flight requests when the user changes page, closes a modal, or types the next keystroke.
+
+Cancellation is **opt-in** — nothing is tracked, and there's no bookkeeping cost, until you ask:
+
+```ts
+const api = createClient({ baseUrl, cancel: true });
+
+// on route change — drop everything the old page started
+router.events.on("routeChangeStart", () => api.cancel());
+```
+
+### Cancel by URL pattern
+
+```ts
+api.cancel();                      // everything in flight
+api.cancel("/api/v1/products");    // just this screen's requests
+```
+
+Patterns are **segment-aware prefixes**, so one line covers a whole subtree without catching its neighbours:
+
+| Pattern | Matches | Does **not** match |
+|---|---|---|
+| `/api/v1/products` | `/api/v1/products`, `/api/v1/products/12`, `/api/v1/products/12/reviews` | `/api/v1/products-archive` |
+| `/api/v1/products$` | `/api/v1/products` | `/api/v1/products/12` |
+| `/users/:id`, `/users/*` | `/users/7`, `/users/7/posts` | `/users`, `/orgs/7` |
+| `/users/:id$` | `/users/7` | `/users/7/posts` |
+| `/api/**/images` | `/api/images`, `/api/a/b/images` | `/other/images` |
+
+Also accepted: a `RegExp`, an object (`{ url, method, key, group }`), or a predicate.
+
+### Cancel by scope — modals and widgets
+
+```ts
+const scope = api.cancelScope("product-modal");
+
+await scope.get("/api/v1/products/12");
+await scope.get("/api/v1/products/12/reviews");
+
+scope.cancel();   // when the modal closes
+```
+
+Scopes are self-enabling: requests made through one are cancelable even on a client that never set `cancel`.
+
+### Cancel stale searches
+
+```ts
+await api.get("/search", { params: { q }, cancelKey: "search", takeLatest: true });
+```
+
+Each keystroke retires the previous request with the same key, so a fast typist can never be shown an older result.
+
+### What you get back
+
+```ts
+{ statusCode: 0, status: false, canceled: true, cancelReason: "left the page", … }
+```
+
+```ts
+try {
+  await api.get("/api/v1/products");
+} catch (e) {
+  if (e instanceof ApiError && e.canceled) return;  // deliberate — not a failure
+  throw e;
+}
+```
+
+- `onError` **never** fires for a cancellation — navigating away shouldn't raise a toast
+- A timeout stays distinct: `408`, with `canceled` unset
+- Only `GET` is tracked by default. A canceled write may already have been committed by the server, so writes opt in with `cancelable: true` or `cancel: { methods: "all" }`
+- `login()`, `logout()` and the `restoreSession()` probe are never tracked, so a blanket `cancel()` can't abort the auth handshake
+- Works identically in worker mode — the real `fetch` stops and the socket closes
+
+```ts
+api.pending();                  // inspect what's in flight
+api.cancel("/x", "reason");     // returns how many it stopped
+```
+
+Full guide: **[Cancellation](https://github.com/mohammadreza-zr/api-client/wiki/Cancellation)**.
+
+---
+
 ## Client options
 
 | Option | Default | Description |
@@ -315,6 +403,7 @@ Streams are single-use by nature, so prefer `uploadSkewMs` when streaming. Note 
 | `getCsrfToken` | – | Supplies the CSRF token directly. Required in worker mode |
 | `authMode` | `"header"` | `"header"` or `"cookie"` |
 | `credentials` | per mode | `"same-origin"`, or `"include"` in cookie mode |
+| `cancel` | `false` | Opt in to cancellation. `true`, or `{ methods, throwOnCancel, takeLatest }` |
 | `worker` | `true` | Run requests in a Web Worker |
 | `multiTab` | `true` | Sync auth across tabs |
 | `storage` | `"memory"` | `"memory" \| "local" \| "session" \| "cookie"`, or your own adapter |
@@ -492,6 +581,11 @@ api.refresh()                    // force a refresh; null on failure
 api.getAuthState()               // { isAuthenticated, expiresAt, user }
 api.restoreSession("/api/auth/me") // cookie mode: detect an existing session on boot
 api.onAuthStateChange(listener)  // returns unsubscribe
+
+api.cancel(selector?, reason?)   // cancel in-flight requests; returns how many
+api.pending(selector?)           // inspect what's in flight
+api.cancelScope("modal")         // a wrapper whose requests cancel together
+
 api.isWorker                     // whether requests run in a worker
 api.destroy()                    // terminate worker + close channel
 ```

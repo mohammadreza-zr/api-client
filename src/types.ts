@@ -33,6 +33,18 @@ export interface IRes<R = unknown> {
   error?: unknown;
   /** Response headers as a plain object (lowercased keys). */
   headers?: Record<string, string>;
+  /**
+   * `true` when the request was canceled — by `cancel()`, a `cancelScope`,
+   * `takeLatest`, or your own `AbortSignal`. Always paired with
+   * `statusCode: 0`, and never set for a timeout (`408`).
+   *
+   * ```ts
+   * if (res.canceled) return;   // the user navigated away; not an error
+   * ```
+   */
+  canceled?: boolean;
+  /** The reason passed to `cancel()`, when one was given. */
+  cancelReason?: string;
 }
 
 /** Common paginated list shape. */
@@ -62,6 +74,19 @@ export class ApiError extends Error {
   readonly errors?: Record<string, string[]>;
   readonly data?: unknown;
   readonly response: IRes<unknown>;
+  /**
+   * `true` when the failure was a cancellation rather than a real error.
+   *
+   * ```ts
+   * catch (e) {
+   *   if (e instanceof ApiError && e.canceled) return;  // expected
+   *   throw e;
+   * }
+   * ```
+   */
+  readonly canceled: boolean;
+  /** The reason passed to `cancel()`, when one was given. */
+  readonly cancelReason?: string;
 
   constructor(response: IRes<unknown>) {
     super(response.message || `Request failed with status ${response.statusCode}`);
@@ -70,7 +95,142 @@ export class ApiError extends Error {
     this.errors = response.errors;
     this.data = response.data;
     this.response = response;
+    this.canceled = response.canceled === true;
+    this.cancelReason = response.cancelReason;
   }
+}
+
+// ── Cancellation ─────────────────────────────────────────
+
+/** A tracked in-flight request, as seen by `pending()` and predicate selectors. */
+export interface PendingRequest {
+  /** Monotonic id, unique per client. */
+  id: number;
+  method: HttpMethod;
+  /** The fully resolved URL, query string included. */
+  url: string;
+  /** Just the path — no origin, no query, no hash. What patterns match against. */
+  path: string;
+  /** The `cancelKey` this request was sent with, when any. */
+  key?: string;
+  /** The `cancelGroup` tags this request was sent with. */
+  groups: string[];
+  /** Epoch ms when the request was registered. */
+  startedAt: number;
+}
+
+/**
+ * Selects which in-flight requests to cancel.
+ *
+ * | Selector | Cancels |
+ * |---|---|
+ * | *(omitted)* | everything in flight |
+ * | `"/api/v1/products"` | a matching `cancelKey`, `cancelGroup`, or URL path prefix |
+ * | `/\/products\/\d+/` | requests whose URL or path matches the regex |
+ * | `{ url, method, key, group }` | requests matching **every** field given |
+ * | `(req) => boolean` | whatever you decide |
+ *
+ * A bare string is intentionally forgiving — it tries the key, then the group,
+ * then the URL pattern. Use the object form when you need to be exact.
+ *
+ * URL patterns are segment-aware and prefix-based:
+ *
+ * - `"/api/v1/products"` → `/api/v1/products`, `/api/v1/products/12`,
+ *   `/api/v1/products/12/reviews` — but **not** `/api/v1/products-archive`
+ * - `"/users/:id"` or `"/users/*"` → exactly one segment in that position
+ * - `"/api/**\/images"` → zero or more segments in between
+ * - `"/users$"` → exact: `/users` only, nothing below it
+ */
+export type CancelSelector =
+  | string
+  | RegExp
+  | CancelMatch
+  | ((request: PendingRequest) => boolean);
+
+/** The explicit selector form. All supplied fields must match. */
+export interface CancelMatch {
+  /** URL pattern (see {@link CancelSelector}) or a regex. */
+  url?: string | RegExp;
+  /** Restrict to one or more HTTP methods. */
+  method?: HttpMethod | HttpMethod[];
+  /** Match a `cancelKey` exactly. */
+  key?: string;
+  /** Match one of the request's `cancelGroup` tags. */
+  group?: string;
+}
+
+/**
+ * Client-wide cancellation settings. Opt-in: cancellation is **off** unless
+ * you enable it, and even then only `GET` is covered by default.
+ *
+ * ```ts
+ * createClient({ cancel: true });                          // GETs are cancelable
+ * createClient({ cancel: { methods: "all" } });            // everything is
+ * createClient({ cancel: { takeLatest: true } });          // and auto-supersede
+ * ```
+ */
+export interface CancelOptions {
+  /**
+   * Which methods become cancelable automatically. Default `["GET"]`.
+   *
+   * Reads are always safe to cancel. Writes are not — the server may already
+   * have committed one — so `POST`/`PUT`/`PATCH`/`DELETE` stay opt-in unless
+   * you widen this or set `cancelable: true` on the request.
+   */
+  methods?: HttpMethod[] | "all";
+
+  /**
+   * Whether a canceled request rejects with an `ApiError` (`canceled: true`)
+   * or resolves with the envelope.
+   *
+   * Defaults to whatever `throwError` is, so cancellation behaves like every
+   * other failure unless you say otherwise. Set it explicitly to make the two
+   * differ — the usual reason being "reject on real errors, but stay quiet
+   * when the user simply navigated away":
+   *
+   * ```ts
+   * createClient({ cancel: { throwOnCancel: false } });
+   * ```
+   */
+  throwOnCancel?: boolean;
+
+  /**
+   * Auto-cancel the previous in-flight request that shares the same identity
+   * (`cancelKey`, or `METHOD + path` when no key is given). Default `false`.
+   *
+   * Turns a stale-search race into a no-op: each keystroke supersedes the last.
+   */
+  takeLatest?: boolean;
+}
+
+/**
+ * A cancellation scope: a thin wrapper around the client whose requests are
+ * all tagged, so one `cancel()` stops the lot.
+ *
+ * Built for the "close the modal / leave the page" case:
+ *
+ * ```ts
+ * const scope = api.cancelScope("product-modal");
+ * await scope.get("/api/v1/products/12");
+ * // on close
+ * scope.cancel();
+ * ```
+ */
+export interface CancelScope {
+  /** The group tag applied to every request made through this scope. */
+  readonly name: string;
+
+  get<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>>;
+  post<R = unknown>(url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
+  put<R = unknown>(url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
+  patch<R = unknown>(url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
+  delete<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>>;
+
+  /** Cancels everything started through this scope. Returns how many stopped. */
+  cancel(reason?: string): number;
+
+  /** The scope's in-flight requests. */
+  pending(): PendingRequest[];
 }
 
 // ── Per-request config ───────────────────────────────────
@@ -143,6 +303,53 @@ export interface RequestConfig<T = unknown>
 
   /** Emit a structured log line for this request. */
   log?: boolean;
+
+  /**
+   * Track this request so `cancel()` can stop it.
+   *
+   * Overrides the client-wide `cancel` setting in both directions — opt a
+   * single write in, or opt one critical GET out.
+   *
+   * ```ts
+   * await api.post("/draft", body, { cancelable: true });   // in
+   * await api.get("/session", { cancelable: false });       // out
+   * ```
+   *
+   * Implied by `cancelKey` and `takeLatest`.
+   */
+  cancelable?: boolean;
+
+  /**
+   * A stable identity for this request.
+   *
+   * Cancel it by name (`api.cancel("search")`), and — with `takeLatest` —
+   * supersede the previous request that shares the key.
+   */
+  cancelKey?: string;
+
+  /**
+   * Tags for bulk cancellation: `api.cancel("checkout")` stops every request
+   * tagged `"checkout"`. A request can carry several tags.
+   *
+   * Tagging alone does not make a write cancelable; pair it with
+   * `cancelable: true` when you mean to cancel one.
+   */
+  cancelGroup?: string | string[];
+
+  /**
+   * Cancel the previous in-flight request with the same identity before
+   * sending this one — the stale-search pattern, built in.
+   *
+   * Identity is `cancelKey` when given, otherwise `METHOD + path`.
+   */
+  takeLatest?: boolean;
+
+  /**
+   * Reject with an `ApiError` when canceled, instead of resolving with the
+   * envelope. Falls back to the client's `cancel.throwOnCancel`, and then to
+   * `throwError`.
+   */
+  throwOnCancel?: boolean;
 
   /** Transform the body right before it is serialized. */
   beforeFunc?: (body: unknown) => unknown;
@@ -228,6 +435,30 @@ export interface ClientOptions {
    * ```
    */
   throwError?: boolean;
+
+  /**
+   * Opt in to cancellation. **Off by default** — nothing is tracked and there
+   * is no bookkeeping cost until you ask for it.
+   *
+   * Once enabled, requests are registered while in flight and `api.cancel()`
+   * can stop them by URL pattern, key, group or predicate. Only `GET` is
+   * covered unless you widen `methods`: cancelling a read is always safe,
+   * whereas a canceled write may already have been committed by the server.
+   *
+   * ```ts
+   * const api = createClient({ cancel: true });
+   *
+   * // React Router / Next.js — drop everything the old page started
+   * router.events.on("routeChangeStart", () => api.cancel());
+   *
+   * // Close a modal — drop just its requests
+   * api.cancel("/api/v1/products");
+   * ```
+   *
+   * Per-request `cancelable` always wins, so a single call can opt in or out
+   * regardless of this setting.
+   */
+  cancel?: boolean | CancelOptions;
 
   /**
    * Name of the cookie holding the CSRF token. When set, the client reads it

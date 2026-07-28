@@ -8,6 +8,7 @@
 **Requests**
 - [[Requests]]
 - [[Request Config]]
+- [[Cancellation]]
 - [[Responses and Errors]]
 - [[Uploads and Binary Bodies]]
 

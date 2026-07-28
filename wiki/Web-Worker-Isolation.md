@@ -125,15 +125,16 @@ Every kind therefore behaves the same in both modes, and sessions survive a relo
 
 ## Cancellation across the boundary
 
-`AbortSignal` is not cloneable, so the host strips it and manages cancellation by message:
+`AbortSignal` is not cloneable, so the host strips it and manages cancellation by message. The cancel registry lives on the host for the same reason — plus `api.cancel()` has to be synchronous and work before the worker has even booted:
 
 ```
 host: api.get(url, { signal })
-      └─ signal.onabort → postMessage({ kind: "abort", id })
-worker: controller.abort() → the real fetch is aborted
+      └─ signal.onabort → postMessage({ kind: "abort", id, reason })
+      └─ api.cancel(selector) → same message, for every match
+worker: controller.abort(CancelError) → the real fetch is aborted
 ```
 
-Cancellation is genuine, not cosmetic — the network request really stops.
+Cancellation is genuine, not cosmetic — the network request really stops and the socket closes. `pending()` is answered from the host, so it stays synchronous too. See **[[Cancellation]]**.
 
 ---
 

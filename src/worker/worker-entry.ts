@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import { CoreClient } from "../internal/core-client";
+import { CancelError } from "../internal/cancel";
 import type { HostMessage, WorkerMessage } from "./protocol";
 import type { LogEntry, RequestConfig, TokenPair, TokenStorage } from "../types";
 
@@ -117,7 +118,9 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
       }
 
       case "abort": {
-        aborters.get(msg.id)?.abort();
+        // Abort with a CancelError so the engine reports it as a cancellation
+        // — flagged, with the reason — rather than a bare abort.
+        aborters.get(msg.id)?.abort(new CancelError(msg.reason));
         aborters.delete(msg.id);
         break;
       }
@@ -165,7 +168,9 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
       case "destroy": {
         client?.destroy();
         client = null;
-        for (const controller of aborters.values()) controller.abort();
+        for (const controller of aborters.values()) {
+          controller.abort(new CancelError("client destroyed"));
+        }
         aborters.clear();
         self.close();
         break;

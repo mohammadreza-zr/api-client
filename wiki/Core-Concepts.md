@@ -150,7 +150,7 @@ Headers merge (per-request keys override client keys, case-insensitively for `Co
 3.  preflight refresh     if token expires within refreshSkewMs / uploadSkewMs
 4.  build headers         defaults + per-request + Authorization + CSRF
 5.  serialize body        JSON.stringify, unless the body is raw (FormData/Blob/…)
-6.  fetch()               with a linked timeout + user AbortSignal
+6.  fetch()               with a linked timeout + user signal + cancel registry
 7.  on 401 (+auth wanted) refresh once → retry once  (streams can't replay)
 8.  parse                 JSON, or text, or JSON-without-the-header, or undefined
 9.  unwrap                lift `data` unless fullData
@@ -170,6 +170,8 @@ Each numbered step maps to an option documented in **[[Request Config]]**.
 **`addToUrl` throws on falsy segments.** `api.get("/users", { addToUrl: [undefined] })` is a bug — usually an unresolved ID. Rather than silently request `/users//`, the client throws with the offending index.
 
 **Opaque tokens are trusted.** `isTokenExpired` returns `false` for a token with no readable `exp` claim. The client cannot know when an opaque token dies, so it lets the server decide via a 401 instead of guessing.
+
+**Cancellation is opt-in, and GET-only when on.** Tracking every request costs an `AbortController` each, and a stray `cancel()` could kill something the app needed — neither belongs in a default. And even enabled, only reads are covered: a canceled write may already have been committed by the server, leaving the client permanently unsure. Writes opt in explicitly. See **[[Cancellation]]**.
 
 **Bad listeners can't break auth.** Every subscriber callback is invoked inside a `try/catch`. One throwing listener never prevents the others from running or corrupts auth state.
 

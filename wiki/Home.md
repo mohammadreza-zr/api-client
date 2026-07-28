@@ -28,8 +28,9 @@ const { data } = await api.get<User[]>("/users");
 | **Concurrency-safe refresh** | 50 simultaneous 401s trigger exactly **one** refresh call — a shared promise, not a polling loop. |
 | **Drop-in for TanStack Query / SWR** | Failures reject with a typed `ApiError`; switch to a never-throwing envelope with one flag. |
 | **Real upload support** | `FormData`, `File`, `Blob`, `ArrayBuffer`, typed arrays and `ReadableStream`, with token refresh handled mid-upload. |
+| **Opt-in cancellation** | Cancel by URL pattern, scope or key when the user changes page or closes a modal — real aborts, worker mode included. |
 | **CSRF double-submit** | Built in, for cookie auth. |
-| **~10 KB** | min+gzip, tree-shakeable, ESM + CJS + full types. |
+| **~13 KB** | min+gzip, tree-shakeable, ESM + CJS + full types. |
 
 ---
 
@@ -43,6 +44,7 @@ const { data } = await api.get<User[]>("/users");
 ### Making requests
 - **[[Requests]]** — `get`/`post`/`put`/`patch`/`delete`, URL building, params
 - **[[Request Config]]** — every per-request option, explained
+- **[[Cancellation]]** — cancel on page change, modal close or a new keystroke
 - **[[Responses and Errors]]** — `IRes`, `ApiError`, throwing vs. envelope
 - **[[Uploads and Binary Bodies]]** — FormData, Blob, streams, long uploads
 
