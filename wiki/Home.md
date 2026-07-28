@@ -1,8 +1,8 @@
 # @mrzr/api-client
 
-A typed REST client built on `fetch` with **zero runtime dependencies**.
+**The HTTP layer under TanStack Query, SWR and Vue Query — it handles authentication so they don't have to.**
 
-Automatic token refresh, Web Worker isolation so tokens never touch the main thread, and cross-tab auth sync — in one `createClient()` call that works the same everywhere.
+A TypeScript-first API client focused on secure browser auth: coalesced token refresh, Web Worker token isolation, and cross-tab session sync. Zero runtime dependencies.
 
 ```bash
 npm install @mrzr/api-client
@@ -13,24 +13,78 @@ import { createClient } from "@mrzr/api-client";
 
 export const api = createClient({ baseUrl: "https://api.example.com" });
 
+await api.login({ email, password });
 const { data } = await api.get<User[]>("/users");
 ```
 
 ---
 
-## Why this client
+## Is this for you?
+
+Most HTTP clients treat auth as something you bolt on with interceptors. This one treats it as the product.
+
+**Use it if** any of these are real problems:
+
+- An expired token makes 20 concurrent requests each fire their own refresh
+- You want tokens off the main thread, where XSS can't read them
+- Logging out in one tab should log out the others
+- You use httpOnly cookies and can't tell on page load whether a session exists
+- You need refresh to work *during* a five-minute upload
+
+**Use something else if not.** For a small `fetch` wrapper, [ky](https://github.com/sindresorhus/ky) is excellent — a third of the size, built-in retry. For the biggest ecosystem and legacy support, axios. Neither is trying to solve browser auth, and this isn't trying to out-ky ky.
+
+---
+
+## How it compares
+
+Including the rows where this library loses.
+
+| | axios | ky | @mrzr/api-client |
+|---|---|---|---|
+| Zero runtime dependencies | ✗ | ✓ | ✓ |
+| Bundle, min+gzip | ~14 KB | **~4 KB** | 13.4 KB |
+| Built on | XHR / node:http | fetch | fetch |
+| Retry with backoff | via `axios-retry` | **✓ built in** | ✗ *(not yet)* |
+| Interceptors / hooks | **✓ global** | **✓ global** | per-request transforms |
+| **Coalesced token refresh** | build it yourself | build it yourself | **✓ built in** |
+| **Web Worker token isolation** | ✗ | ✗ | **✓** |
+| **Cross-tab auth sync** | ✗ | ✗ | **✓** |
+| **httpOnly cookie session restore** | ✗ | ✗ | **✓** |
+| **Cancel by URL pattern / scope** | ✗ | ✗ | **✓** |
+| CSRF double-submit | partial | ✗ | ✓ |
+
+- **Size.** 13.4 KB is axios-territory and 3× ky. ~3.8 KB of it is the inlined worker, which ships even with `worker: false` — a runtime flag can't be tree-shaken.
+- **Retry.** Not implemented. It has to interact correctly with refresh-and-retry, cancellation and `takeLatest`; shipping it half-right would be worse than not shipping it.
+
+---
+
+## What it actually does
 
 | | |
 |---|---|
-| **Zero dependencies** | Nothing but the platform `fetch`. No `axios`, no `qs`, no polyfills. |
+| **Coalesced refresh** | 50 simultaneous 401s trigger exactly **one** refresh call — a shared promise, not a polling loop. |
+| **Worker isolation** | Requests run in a Web Worker by default, so tokens never enter the main-thread heap. |
+| **Cross-tab sync** | Login, logout and refresh propagate over `BroadcastChannel`, with leader election. |
+| **httpOnly cookie mode** | Including `restoreSession()`, which answers the "am I logged in?" question cookies make unanswerable from JS. |
+| **Opt-in cancellation** | Cancel by URL pattern, scope or key on page change or modal close. Real aborts, worker mode included. |
+| **Real upload support** | `FormData`, `File`, `Blob`, `ArrayBuffer`, typed arrays and `ReadableStream`, with refresh handled mid-upload. |
+| **One request engine** | The worker and main thread run the *same* compiled code, so behaviour can never drift. |
 | **Runs anywhere** | React, Vue, Svelte, Angular, Next.js, Nuxt, SvelteKit, plain `<script>`, Node 20+, Deno, Bun, Cloudflare Workers. |
-| **One request engine** | The worker and the main thread execute the *same* compiled code, so behaviour can never drift between modes. |
-| **Concurrency-safe refresh** | 50 simultaneous 401s trigger exactly **one** refresh call — a shared promise, not a polling loop. |
-| **Drop-in for TanStack Query / SWR** | Failures reject with a typed `ApiError`; switch to a never-throwing envelope with one flag. |
-| **Real upload support** | `FormData`, `File`, `Blob`, `ArrayBuffer`, typed arrays and `ReadableStream`, with token refresh handled mid-upload. |
-| **Opt-in cancellation** | Cancel by URL pattern, scope or key when the user changes page or closes a modal — real aborts, worker mode included. |
-| **CSRF double-submit** | Built in, for cookie auth. |
-| **~13 KB** | min+gzip, tree-shakeable, ESM + CJS + full types. |
+
+---
+
+## Works with your data library
+
+It sits *under* TanStack Query, SWR or Vue Query — it doesn't replace them.
+
+```ts
+useQuery({
+  queryKey: ["users"],
+  queryFn: ({ signal }) => api.get<User[]>("/users", { signal }).then((r) => r.data),
+});
+```
+
+Failures reject with a typed `ApiError`, which is what Query and SWR need to mark a request failed. Cancellation resolves instead, flagged `canceled: true`, so a route change never looks like an error.
 
 ---
 

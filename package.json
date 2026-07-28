@@ -1,7 +1,7 @@
 {
   "name": "@mrzr/api-client",
   "version": "1.0.2",
-  "description": "Dependency-free typed REST client with automatic token refresh, Web Worker isolation and cross-tab auth sync. Works in React, Vue, Next.js, Nuxt, SSR and plain JS.",
+  "description": "The HTTP layer under TanStack Query, SWR and Vue Query — it handles auth so they don't have to. Coalesced token refresh, Web Worker token isolation, cross-tab session sync. Zero dependencies.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
