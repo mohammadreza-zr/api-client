@@ -231,7 +231,7 @@ scope.cancel();
 await api.get("/search", { params: { q }, cancelKey: "search", takeLatest: true });
 ```
 
-Both paths set `canceled: true` on the envelope (and on `ApiError`), and neither fires `onError` — navigating away is not a failure the user should see. A timeout stays distinct at `408`.
+Both paths set `canceled: true` and **resolve** rather than reject — even under the default `throwError: true` — so check `res.canceled` before using `res.data`. Neither fires `onError`: navigating away is not a failure the user should see. A timeout stays distinct at `408`, and still throws.
 
 In worker mode, cancelling posts an `abort` message to the worker, which aborts the real `fetch` — cancellation is not merely cosmetic.
 

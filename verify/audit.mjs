@@ -184,7 +184,13 @@ try {
   });
   check("queryFn receives AbortSignal and client accepts it", sawSignal);
 
-  // Does an aborted request reject (so react-query treats it as cancelled)?
+  /*
+   * An aborted request RESOLVES, flagged, even under throwError:true.
+   *
+   * [documented] This is deliberate and was measured, not assumed. Rejecting
+   * makes react-query treat the cancellation as a retryable error and re-fire
+   * the very request that was just canceled — see the retry-storm check below.
+   */
   const ac = new AbortController();
   const abortPromise = api.get("/slow", { signal: ac.signal, throwError: true });
   setTimeout(() => ac.abort(), 50);
@@ -196,9 +202,49 @@ try {
     abortRejected = true;
   }
   check(
-    "aborted request rejects with throwError:true",
-    abortRejected,
-    abortRejected ? "" : `resolved instead: statusCode=${abortSettled?.statusCode}`,
+    "[documented] aborted request resolves flagged, not rejected, under throwError:true",
+    !abortRejected && abortSettled?.canceled === true,
+    abortRejected ? "rejected instead" : `canceled=${abortSettled?.canceled}`,
+  );
+
+  // Opting back in must still work.
+  const ac2 = new AbortController();
+  const strictAbort = api.get("/slow", { signal: ac2.signal, throwOnCancel: true });
+  setTimeout(() => ac2.abort(), 50);
+  let strictRejected = false;
+  try {
+    await strictAbort;
+  } catch (e) {
+    strictRejected = e instanceof ApiError && e.canceled === true;
+  }
+  check("throwOnCancel:true still rejects, with canceled set", strictRejected);
+
+  /*
+   * The retry storm this default prevents.
+   *
+   * With a rejecting cancel, react-query's retry policy sees a normal failure
+   * and re-issues the request the app just canceled. Counting server hits is
+   * the only honest way to assert it.
+   */
+  const before = state.slowHits ?? 0;
+  const retryQc = new QueryClient();
+  const cancelApi = createClient({ baseUrl: BASE, worker: false, cancel: true });
+  const entry = retryQc.getQueryCache().build(retryQc, {
+    queryKey: ["cancel-retry"],
+    retry: 3,
+    retryDelay: 10,
+    queryFn: () => cancelApi.get("/slow"),
+  });
+  const fetching = entry.fetch();
+  await new Promise((r) => setTimeout(r, 60));
+  cancelApi.cancel();
+  await fetching.catch(() => {});
+  await new Promise((r) => setTimeout(r, 300));
+  const hits = (state.slowHits ?? 0) - before;
+  check(
+    "canceling does not trigger a react-query retry storm",
+    hits === 1,
+    `server saw ${hits} request(s); >1 means the cancel was retried`,
   );
 
   // ── 3. SWR integration ────────────────────────────────

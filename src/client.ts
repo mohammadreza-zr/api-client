@@ -139,11 +139,8 @@ type Implementation = Pick<
   | "pending"
   | "destroy"
 > & {
-  /**
-   * Resolves `throwOnCancel` for a config, using the client-wide default.
-   * `undefined` when unset, meaning "fall back to `throwError`".
-   */
-  shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean | undefined;
+  /** Resolves `throwOnCancel` for a config, using the client-wide default. */
+  shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean;
 };
 
 /**
@@ -200,19 +197,17 @@ function wrap(impl: Implementation, isWorker: boolean, options: ClientOptions): 
     if (result.status) return result;
 
     /*
-     * Cancellation gets its own switch, but only when someone set one.
+     * Cancellation is governed by `throwOnCancel`, not `throwError`.
      *
-     * Unset, it follows `throwError` — so a client built for the envelope
-     * style keeps resolving, and the default (throwing) client keeps
-     * rejecting, which is what TanStack Query and SWR need to recognise
-     * failure at all. `throwOnCancel` exists for the app that wants those two
-     * to differ: reject on real errors, resolve quietly on navigation.
+     * The two are deliberately independent: a cancellation is something the
+     * app asked for, so it resolves by default even on a throwing client.
+     * Rejecting instead makes TanStack Query retry the request that was just
+     * canceled, and turns the ordinary `useEffect` async pattern into an
+     * unhandled rejection. Opt back in with `throwOnCancel: true`.
      */
-    const cancelPreference = result.canceled
+    const shouldThrow = result.canceled
       ? impl.shouldThrowOnCancel(config as RequestConfig<unknown> | undefined)
-      : undefined;
-
-    const shouldThrow = cancelPreference ?? config?.throwError ?? throwByDefault;
+      : (config?.throwError ?? throwByDefault);
 
     if (shouldThrow) throw new ApiError(result);
     return result;

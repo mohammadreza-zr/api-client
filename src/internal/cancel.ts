@@ -210,12 +210,10 @@ export interface CancelDefaults {
   /** Methods covered when `enabled`. */
   methods: "all" | ReadonlySet<HttpMethod>;
   /**
-   * Whether a canceled request rejects.
-   *
-   * `undefined` means "follow `throwError`", which is what keeps a client
-   * configured for the envelope style from suddenly throwing on cancel.
+   * Whether a canceled request rejects. Independent of `throwError`, because
+   * a cancellation is not an error — see {@link resolveCancelDefaults}.
    */
-  throwOnCancel: boolean | undefined;
+  throwOnCancel: boolean;
   /** Whether every cancelable request supersedes its previous twin. */
   takeLatest: boolean;
 }
@@ -229,13 +227,34 @@ export interface CancelDefaults {
  */
 const GET_ONLY: ReadonlySet<HttpMethod> = new Set<HttpMethod>(["GET"]);
 
+/**
+ * Cancellation resolves by default, even when `throwError` is on.
+ *
+ * A cancellation is something the application asked for, not a failure, and
+ * treating it as one costs more than it gives:
+ *
+ * 1. **TanStack Query retries it.** A rejection looks like a retryable error,
+ *    so Query re-fires the very request that was just canceled. Measured: two
+ *    server hits with throwing, one without. Query's own `signal` path is
+ *    unaffected either way — it short-circuits before the promise settles —
+ *    so throwing buys nothing there and actively harms `api.cancel()`.
+ *
+ * 2. **It produces unhandled rejections in the common React pattern.** An
+ *    async IIFE inside `useEffect` has no `catch`, so cancelling on unmount
+ *    surfaces a red overlay in dev and error-reporter noise in production.
+ *
+ * `onError` already skips cancellations; rejecting while suppressing the
+ * error hook would be half a position. Real failures still throw per
+ * `throwError` — only cancellation is exempt. Opt back in with
+ * `throwOnCancel: true`.
+ */
 export function resolveCancelDefaults(option: boolean | CancelOptions | undefined): CancelDefaults {
   if (option === undefined || option === false) {
-    return { enabled: false, methods: GET_ONLY, throwOnCancel: undefined, takeLatest: false };
+    return { enabled: false, methods: GET_ONLY, throwOnCancel: false, takeLatest: false };
   }
 
   if (option === true) {
-    return { enabled: true, methods: GET_ONLY, throwOnCancel: undefined, takeLatest: false };
+    return { enabled: true, methods: GET_ONLY, throwOnCancel: false, takeLatest: false };
   }
 
   return {
@@ -246,7 +265,7 @@ export function resolveCancelDefaults(option: boolean | CancelOptions | undefine
         : option.methods && option.methods.length > 0
           ? new Set(option.methods)
           : GET_ONLY,
-    throwOnCancel: option.throwOnCancel,
+    throwOnCancel: option.throwOnCancel === true,
     takeLatest: option.takeLatest === true,
   };
 }

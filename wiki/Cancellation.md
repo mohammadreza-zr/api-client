@@ -149,6 +149,8 @@ interface PendingRequest {
 
 ## What a canceled request looks like
 
+A cancellation **resolves** — even under the default `throwError: true` — with `canceled: true` on the envelope:
+
 ```ts
 {
   statusCode: 0,
@@ -160,33 +162,45 @@ interface PendingRequest {
 }
 ```
 
-With the default `throwError: true` it rejects instead, with the same information on the error:
+So the guard is one line, with no `try`/`catch`:
 
 ```ts
-try {
-  await api.get("/api/v1/products");
-} catch (e) {
-  if (e instanceof ApiError && e.canceled) return;  // expected — not a failure
-  throw e;
-}
+const res = await api.get("/api/v1/products");
+if (res.canceled) return;      // superseded or unmounted — not an error
+setProducts(res.data);
 ```
 
 Three details worth knowing:
 
 - **`onError` never fires for a cancellation.** Navigating away should not raise an error toast.
 - **A timeout is not a cancellation.** It stays `408` / `"Request timed out"`, with `canceled` unset, so you can still tell them apart.
-- **Your own `AbortSignal` counts too.** It sets `canceled: true` and keeps the classic `"Request aborted"` message.
+- **Your own `AbortSignal` behaves identically.** It sets `canceled: true` and resolves too — one rule, not two.
 
-### Throw or resolve?
+### Why cancellation doesn't throw
 
-`throwOnCancel` follows `throwError` unless you set it, so nothing changes for an existing client. Set it when you want the two to differ — reject on real errors, stay quiet on navigation:
+`throwOnCancel` is **independent of `throwError`**, and defaults to `false`. Real failures still throw; only cancellation is exempt. Two measured reasons:
+
+1. **TanStack Query retries a rejected cancel.** A rejection looks like an ordinary retryable error, so Query re-fires the request you just canceled. Measured against real `query-core`: **two** server hits when cancellation throws, **one** when it resolves. (Query's own `signal` path is unaffected either way — it short-circuits before the promise settles — so throwing buys nothing there and actively harms `api.cancel()`.)
+
+2. **It breaks the ordinary React pattern.** An async IIFE in `useEffect` has no `catch`, so cancelling on unmount produces an **unhandled rejection** — a red overlay in Next dev, noise in your error reporter.
+
+Rejecting while `onError` stays silent would also be half a position: either a cancellation is a failure or it isn't.
+
+Opt back in when you want a cancellation to abort a surrounding `try` block:
 
 ```ts
-createClient({ cancel: { throwOnCancel: false } });   // client-wide
-await api.get("/x", { throwOnCancel: false });        // one call
+createClient({ cancel: { throwOnCancel: true } });   // client-wide
+await api.get("/x", { throwOnCancel: true });        // one call
 ```
 
-> Keep the default (`true`) with **TanStack Query, SWR and Vue Query**: they detect failure through a rejected promise, so a resolved empty envelope would be cached as real data.
+```ts
+try {
+  await api.get("/x", { throwOnCancel: true });
+} catch (e) {
+  if (e instanceof ApiError && e.canceled) return;
+  throw e;
+}
+```
 
 ---
 
@@ -196,16 +210,19 @@ await api.get("/x", { throwOnCancel: false });        // one call
 
 ```tsx
 useEffect(() => {
-  const scope = api.cancelScope("user-list");
-  scope.get<User[]>("/users").then(setUsers).catch(ignoreCanceled);
+  const scope = api.cancelScope("user-list");   // inside the effect
+
+  (async () => {
+    const res = await scope.get<User[]>("/users");
+    if (res.canceled) return;                   // unmounted — nothing to do
+    setUsers(res.data);
+  })();
+
   return () => scope.cancel();
 }, []);
-
-const ignoreCanceled = (e: unknown) => {
-  if (e instanceof ApiError && e.canceled) return;
-  throw e;
-};
 ```
+
+Create the scope **inside** the effect. A module-level scope is shared by every mount, so a remount would cancel the new request along with the old one.
 
 ### Next.js App Router — cancel on navigation
 
@@ -291,7 +308,7 @@ createClient({
   // or
   cancel: {
     methods: ["GET"],       // or "all"; default ["GET"]
-    throwOnCancel: true,    // default: follows throwError
+    throwOnCancel: false,   // default; independent of throwError
     takeLatest: false,      // default
   },
 });
@@ -305,7 +322,7 @@ createClient({
 | `cancelKey` | `string` | A stable identity — cancel by name, and the unit `takeLatest` compares |
 | `cancelGroup` | `string \| string[]` | Tags for bulk cancellation |
 | `takeLatest` | `boolean` | Supersede the previous request with the same identity |
-| `throwOnCancel` | `boolean` | Reject or resolve when canceled |
+| `throwOnCancel` | `boolean` | Reject instead of resolving when canceled |
 
 ### Client methods
 

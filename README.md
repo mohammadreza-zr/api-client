@@ -362,19 +362,19 @@ Each keystroke retires the previous request with the same key, so a fast typist 
 
 ### What you get back
 
+A cancellation **resolves** — even under the default `throwError: true` — so the guard is one line and there's no `try`/`catch`:
+
+```ts
+const res = await api.get("/api/v1/products");
+if (res.canceled) return;        // superseded or unmounted — not a failure
+setProducts(res.data);
+```
+
 ```ts
 { statusCode: 0, status: false, canceled: true, cancelReason: "left the page", … }
 ```
 
-```ts
-try {
-  await api.get("/api/v1/products");
-} catch (e) {
-  if (e instanceof ApiError && e.canceled) return;  // deliberate — not a failure
-  throw e;
-}
-```
-
+- **Cancellation never throws by default.** `throwOnCancel` is independent of `throwError`: real failures still reject. Rejecting a cancel makes TanStack Query **retry the request you just canceled** (measured: 2 server hits vs 1), and turns the ordinary `useEffect` async pattern into an unhandled rejection. Opt back in with `throwOnCancel: true`
 - `onError` **never** fires for a cancellation — navigating away shouldn't raise a toast
 - A timeout stays distinct: `408`, with `canceled` unset
 - Only `GET` is tracked by default. A canceled write may already have been committed by the server, so writes opt in with `cancelable: true` or `cancel: { methods: "all" }`

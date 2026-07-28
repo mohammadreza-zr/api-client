@@ -38,8 +38,13 @@ export interface IRes<R = unknown> {
    * `takeLatest`, or your own `AbortSignal`. Always paired with
    * `statusCode: 0`, and never set for a timeout (`408`).
    *
+   * A canceled request **resolves** by default, even under `throwError: true`,
+   * so check this before using `data`:
+   *
    * ```ts
-   * if (res.canceled) return;   // the user navigated away; not an error
+   * const res = await api.get("/todos");
+   * if (res.canceled) return;   // superseded or unmounted; not an error
+   * setTodos(res.data);
    * ```
    */
   canceled?: boolean;
@@ -180,16 +185,19 @@ export interface CancelOptions {
   methods?: HttpMethod[] | "all";
 
   /**
-   * Whether a canceled request rejects with an `ApiError` (`canceled: true`)
-   * or resolves with the envelope.
+   * Whether a canceled request rejects with an `ApiError` (`canceled: true`).
+   * **Default `false`** — it resolves with the envelope instead.
    *
-   * Defaults to whatever `throwError` is, so cancellation behaves like every
-   * other failure unless you say otherwise. Set it explicitly to make the two
-   * differ — the usual reason being "reject on real errors, but stay quiet
-   * when the user simply navigated away":
+   * Independent of `throwError` on purpose: a cancellation is something the
+   * app asked for, not a failure. Rejecting makes TanStack Query treat it as
+   * a retryable error and re-fire the request you just canceled, and turns
+   * the ordinary `useEffect` async pattern into an unhandled rejection.
+   *
+   * Real failures still throw per `throwError`. Opt back in when you want a
+   * cancellation to abort a surrounding `try` block:
    *
    * ```ts
-   * createClient({ cancel: { throwOnCancel: false } });
+   * createClient({ cancel: { throwOnCancel: true } });
    * ```
    */
   throwOnCancel?: boolean;
@@ -346,8 +354,8 @@ export interface RequestConfig<T = unknown>
 
   /**
    * Reject with an `ApiError` when canceled, instead of resolving with the
-   * envelope. Falls back to the client's `cancel.throwOnCancel`, and then to
-   * `throwError`.
+   * envelope. Defaults to the client's `cancel.throwOnCancel` (itself
+   * `false`). Independent of `throwError`.
    */
   throwOnCancel?: boolean;
 

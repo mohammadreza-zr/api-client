@@ -422,8 +422,38 @@ try {
   // ── throwing behaviour ──────────────────────────────────
   console.log("\nthrow vs. resolve");
   {
-    // Default client throws; a canceled request must reject with canceled:true.
+    // A cancellation resolves even on a throwing client: it is not a failure.
     const api = createClient({ baseUrl: BASE, worker: false, cancel: true });
+    const p = api.get("/products", { params: { delay: 300 } });
+    await settle();
+    api.cancel(undefined, "route change");
+
+    let error = null;
+    let res = null;
+    try {
+      res = await p;
+    } catch (e) {
+      error = e;
+    }
+    check("cancel RESOLVES under the default throwError:true", error === null);
+    check("resolved envelope is flagged canceled", res?.canceled === true);
+    check("resolved envelope carries the reason", res?.cancelReason === "route change");
+    check("resolved envelope has statusCode 0", res?.statusCode === 0);
+    check("resolved envelope message mentions the reason", res?.message.includes("route change"));
+
+    // …but a real failure on that same client still throws.
+    let realError = null;
+    try {
+      await api.get("/boom-404-json");
+    } catch (e) {
+      realError = e;
+    }
+    check("real failures still throw under throwError:true", realError === null || realError instanceof ApiError);
+  }
+
+  {
+    // Opting back in.
+    const api = createClient({ baseUrl: BASE, worker: false, cancel: { throwOnCancel: true } });
     const p = api.get("/products", { params: { delay: 300 } });
     await settle();
     api.cancel(undefined, "route change");
@@ -434,7 +464,7 @@ try {
     } catch (e) {
       error = e;
     }
-    check("throwing client rejects on cancel", error instanceof ApiError);
+    check("throwOnCancel:true rejects", error instanceof ApiError);
     check("ApiError.canceled is true", error?.canceled === true);
     check("ApiError.cancelReason is carried", error?.cancelReason === "route change");
     check("ApiError.statusCode is 0", error?.statusCode === 0);
@@ -453,34 +483,8 @@ try {
   }
 
   {
-    // Opt out of throwing for cancels only.
-    const api = createClient({
-      baseUrl: BASE,
-      worker: false,
-      cancel: { throwOnCancel: false },
-    });
-    const p = api.get("/products", { params: { delay: 300 } });
-    await settle();
-    api.cancel();
-    const res = await p;
-    check("throwOnCancel:false resolves while throwError stays on", res.canceled === true);
-
-    let stillThrows = null;
-    try {
-      await api.get("/missing-endpoint", { params: { delay: 0 } });
-    } catch (e) {
-      stillThrows = e;
-    }
-    check("real failures still throw under throwOnCancel:false", stillThrows === null || stillThrows instanceof ApiError);
-  }
-
-  {
     // Per-request override, in both directions.
-    const api = createClient({
-      baseUrl: BASE,
-      worker: false,
-      cancel: { throwOnCancel: false },
-    });
+    const api = createClient({ baseUrl: BASE, worker: false, cancel: true });
     const p = api.get("/products", { throwOnCancel: true, params: { delay: 300 } });
     await settle();
     api.cancel();
@@ -490,7 +494,30 @@ try {
     } catch (e) {
       error = e;
     }
-    check("per-request throwOnCancel:true overrides the client", error instanceof ApiError);
+    check("per-request throwOnCancel:true overrides the resolving default", error instanceof ApiError);
+
+    const api2 = createClient({ baseUrl: BASE, worker: false, cancel: { throwOnCancel: true } });
+    const p2 = api2.get("/products", { throwOnCancel: false, params: { delay: 300 } });
+    await settle();
+    api2.cancel();
+    check("per-request throwOnCancel:false overrides a throwing client", (await p2).canceled === true);
+  }
+
+  {
+    // A plain user AbortSignal follows the same rule — one behaviour, not two.
+    const api = createClient({ baseUrl: BASE, worker: false, cancel: true });
+    const ac = new AbortController();
+    const p = api.get("/products", { signal: ac.signal, params: { delay: 300 } });
+    await settle();
+    ac.abort();
+    let error = null;
+    let res = null;
+    try {
+      res = await p;
+    } catch (e) {
+      error = e;
+    }
+    check("user AbortSignal also resolves by default", error === null && res?.canceled === true);
   }
 
   // ── onError suppression ─────────────────────────────────

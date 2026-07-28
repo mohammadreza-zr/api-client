@@ -314,13 +314,8 @@ export class CoreClient {
     return this.registry.pending(selector);
   }
 
-  /**
-   * Whether a canceled request should reject.
-   *
-   * `undefined` means "no explicit preference" and lets the caller fall back
-   * to `throwError`, so a client built for the envelope style keeps resolving.
-   */
-  shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean | undefined {
+  /** Whether a canceled request should reject. Independent of `throwError`. */
+  shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean {
     return config?.throwOnCancel ?? this.cancelDefaults.throwOnCancel;
   }
 

@@ -30,7 +30,7 @@ await api.get<User>("/users/{id}", { /* RequestConfig<User> */ });
 | `cancelKey` | `string` | – | A stable identity: cancel by name, and the unit `takeLatest` compares |
 | `cancelGroup` | `string \| string[]` | – | Tags for bulk cancellation |
 | `takeLatest` | `boolean` | `false` | Supersede the previous request with the same identity |
-| `throwOnCancel` | `boolean` | follows `throwError` | Reject or resolve when canceled |
+| `throwOnCancel` | `boolean` | `false` | Reject instead of resolving when canceled |
 | **Auth** ||||
 | `skipAuth` | `boolean` | `false` | Send without `Authorization`, skip proactive refresh |
 | `refreshTokenCheck` | `boolean` | `true` | `false` disables the 401 → refresh → retry flow |
@@ -180,10 +180,12 @@ See **[[Cancellation]]** for the full picture.
 
 ### `throwOnCancel`
 
-Follows `throwError` unless set, so nothing changes for an existing client. Set it to make the two differ — reject on real errors, resolve quietly when the user simply navigated away:
+**Independent of `throwError`, and `false` by default**: a canceled request resolves with `canceled: true` even on a throwing client. Real failures still throw.
+
+That is deliberate — rejecting makes TanStack Query retry the request you just canceled, and turns the ordinary `useEffect` async pattern into an unhandled rejection. See **[[Cancellation]]**.
 
 ```ts
-await api.get("/products", { throwOnCancel: false });
+await api.get("/products", { throwOnCancel: true });   // opt back in
 ```
 
 ### `stringifyBody` and `isFormData`

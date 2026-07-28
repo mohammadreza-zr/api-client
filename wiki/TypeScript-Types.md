@@ -134,7 +134,7 @@ await api.get<User[]>("/users", {
 ```ts
 interface CancelOptions {
   methods?: HttpMethod[] | "all";   // default ["GET"]
-  throwOnCancel?: boolean;          // default: follows throwError
+  throwOnCancel?: boolean;          // default false; independent of throwError
   takeLatest?: boolean;             // default false
 }
 

@@ -221,20 +221,26 @@ export function describe(error: unknown): string {
 
 ## Distinguishing cancellation from timeout
 
-Both are "the request didn't finish", but they need different UI. Check the flag, not the message:
+Both are "the request didn't finish", but they need different UI — and they settle differently.
+
+A **cancellation resolves**, even under `throwError: true`, because it is not a failure:
+
+```ts
+const res = await api.get("/report", { signal, timeout: 5_000 });
+if (res.canceled) return;                          // deliberate — say nothing
+```
+
+A **timeout** is a real failure, so it throws (or returns `408` in envelope style):
 
 ```ts
 try {
-  await api.get("/report", { signal, timeout: 5_000 });
+  await api.get("/report", { timeout: 5_000 });
 } catch (e) {
-  if (e instanceof ApiError) {
-    if (e.canceled) return;                                  // deliberate — say nothing
-    if (e.statusCode === 408) return toast("Timed out — try again");
-  }
+  if (e instanceof ApiError && e.statusCode === 408) toast("Timed out — try again");
 }
 ```
 
-`canceled` is `true` for your own `AbortSignal`, for `cancel()`, for a `takeLatest` supersession and for `destroy()`. A timeout leaves it unset and keeps `408`.
+`canceled` is `true` for your own `AbortSignal`, for `cancel()`, for a `takeLatest` supersession and for `destroy()`. A timeout leaves it unset and keeps `408`. With `throwOnCancel: true` a cancellation rejects instead, still carrying `e.canceled`.
 
 `cancelReason` carries the string you passed to `cancel()`, when you passed one:
 

@@ -113,7 +113,7 @@ createClient({ cancel: { takeLatest: true } });  // and auto-supersede
 | Sub-option | Type | Default | Purpose |
 |---|---|---|---|
 | `methods` | `HttpMethod[] \| "all"` | `["GET"]` | Which methods are tracked automatically |
-| `throwOnCancel` | `boolean` | follows `throwError` | Reject or resolve when canceled |
+| `throwOnCancel` | `boolean` | `false` | Reject instead of resolving when canceled. Independent of `throwError` |
 | `takeLatest` | `boolean` | `false` | Supersede the previous request with the same identity |
 
 Only `GET` is covered by default: cancelling a read is always safe, whereas a canceled write may already have been committed by the server. Per-request `cancelable` overrides this in both directions.

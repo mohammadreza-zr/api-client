@@ -52,14 +52,40 @@
   }
   ```
 
-- **`throwOnCancel`**, client-wide and per request, for apps that want to
-  reject on real errors but resolve quietly on navigation. It follows
-  `throwError` unless set, so existing behaviour is unchanged.
+- **`throwOnCancel`**, client-wide and per request, to make a cancellation
+  reject when you want it to.
 
 - New exported types: `CancelOptions`, `CancelSelector`, `CancelMatch`,
   `CancelScope`, `PendingRequest`.
 
 ### Changed
+
+- **A canceled request now resolves instead of rejecting, even under
+  `throwError: true`.** `throwOnCancel` is independent of `throwError` and
+  defaults to `false`. Real failures still throw — only cancellation is
+  exempt.
+
+  This is a **behaviour change for existing `signal` users**: today an
+  `AbortController.abort()` rejects under the default client, and now it
+  resolves with `canceled: true`. Restore the old behaviour with
+  `createClient({ cancel: { throwOnCancel: true } })`, or per request.
+
+  Two measured reasons, both locked into `audit.mjs` against real
+  `@tanstack/query-core`:
+
+  1. **A rejected cancel triggers a retry storm.** react-query cannot tell a
+     cancellation from an ordinary retryable failure, so it re-fires the
+     request that was just canceled — two server hits instead of one. Its own
+     `signal` path is unaffected either way, since it short-circuits before
+     the promise settles, so throwing buys nothing there.
+
+  2. **It breaks the ordinary React pattern.** An async IIFE inside
+     `useEffect` has no `catch`, so cancelling on unmount surfaced an
+     unhandled rejection — a red overlay in Next dev, noise in error
+     reporters.
+
+  Rejecting while `onError` stayed silent was also only half a position:
+  either a cancellation is a failure or it is not.
 
 - `onError` is **no longer fired for canceled requests**. A route change
   should not raise an error toast. Real failures are unaffected.

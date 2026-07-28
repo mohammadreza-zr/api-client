@@ -262,8 +262,28 @@ try {
 
   console.log("\nworker mode: throwing, opt-in and timeouts");
   {
-    // Default (throwing) client.
+    // Default client: throwError is on, but a cancellation still resolves.
     const api = createClient({ baseUrl: BASE, multiTab: false, cancel: true });
+    const p = api.get("/api/v1/products", { params: { delay: 400 } });
+    await settle();
+    api.cancel(undefined, "navigated");
+
+    let error = null;
+    let res = null;
+    try {
+      res = await p;
+    } catch (e) {
+      error = e;
+    }
+    check("worker: cancel resolves under the default throwError:true", error === null);
+    check("worker: resolved envelope is flagged canceled", res?.canceled === true);
+    check("worker: resolved envelope carries the reason", res?.cancelReason === "navigated");
+    api.destroy();
+  }
+
+  {
+    // Opting back in, across the worker boundary.
+    const api = createClient({ baseUrl: BASE, multiTab: false, cancel: { throwOnCancel: true } });
     const p = api.get("/api/v1/products", { params: { delay: 400 } });
     await settle();
     api.cancel(undefined, "navigated");
@@ -274,7 +294,7 @@ try {
     } catch (e) {
       error = e;
     }
-    check("worker: throwing client rejects on cancel", error instanceof ApiError);
+    check("worker: throwOnCancel:true rejects", error instanceof ApiError);
     check("worker: ApiError.canceled", error?.canceled === true);
     check("worker: ApiError.cancelReason", error?.cancelReason === "navigated");
     api.destroy();
