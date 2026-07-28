@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-07-28
+
 ### Added
 
 - **Request cancellation** — stop in-flight requests when the user changes
