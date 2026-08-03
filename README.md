@@ -241,22 +241,29 @@ Request C ─ 401 ─┘
 
 Concurrent failures are coalesced into a single refresh (no stampede, no polling loop). The client also refreshes **proactively** when the JWT is about to expire, saving a wasted round trip:
 
+Only an **authentication rejection** of the refresh ends the session — a 401/403 from the refresh endpoint clears auth in every tab and fires `onAuthFailure`. A **server error** (5xx, rate-limit) or a **network failure** (offline, DNS, timeout) reports the refresh as failed without touching the session: a server-side problem is not proof the user logged out, and a blip is not a logout — the next request simply surfaces its 401 again.
+
 ```ts
 createClient({ refreshSkewMs: 30_000 }); // default; 0 disables
 ```
 
-Non-standard response shape? Map it yourself:
+Non-standard response shape? Map it yourself. Prefer the **declarative form**, which is plain data and therefore keeps Web Worker isolation:
 
 ```ts
 createClient({
   refreshUrl: "/api/v1/auth/token/refresh/",
-  buildRefreshBody: (refresh) => ({ refresh_token: refresh }),
-  extractTokens: (body) => ({
-    accessToken: body.result.jwt,
-    refreshToken: body.result.renew,
-  }),
+  buildRefreshBody: { field: "refresh_token" },   // → { refresh_token: "…" }
+  extractTokens: {
+    // body: { result: { jwt: "…", renew: "…", expires_in: 900 } }
+    accessKeys: ["jwt"],
+    refreshKeys: ["renew"],
+    expiresInKeys: ["expires_in"],
+    roots: ["result"],
+  },
 });
 ```
+
+A **function** still works for arbitrary shapes — but a function cannot be structured-cloned into the request worker, so the function form silently falls back to main-thread mode. Only the declarative `TokenFieldMap` / `RefreshBodyConfig` forms keep worker isolation.
 
 The default extractor already understands `access`/`refresh`, `access_token`/`refresh_token`, `accessToken`/`refreshToken`, and the same keys nested under `data`, `tokens` or `result`.
 
@@ -269,8 +276,11 @@ By default every request runs inside a Web Worker created from an inlined blob �
 - Tokens live in the worker's closure and are **never** posted to the main thread
 - An XSS payload on your page cannot read `localStorage` or a JS variable to steal them
 - Auth *state* (booleans, timestamps, `user`) crosses the boundary; tokens never do
+- Even the `login()` response is stripped of its token fields before it resolves on the main thread — the extractor captures them into the worker's closure, and what your code receives is the rest of the payload (`user`, `message`, …)
 
 It disables itself automatically during SSR, where `Worker` is unavailable, or when a CSP blocks blob workers — falling back to the identical main-thread implementation.
+
+Two options disable it *only when passed as functions*, because a function cannot be structured-cloned across the boundary: **`extractTokens`** and **`buildRefreshBody`**. Their declarative forms — a `TokenFieldMap` and a `RefreshBodyConfig` — are plain data and keep worker isolation. A function form falls back to inline mode silently, so check `api.isWorker` at startup if that matters to you.
 
 ```ts
 createClient({ worker: false }); // opt out
@@ -664,7 +674,8 @@ api.delete<R>(url, config?)
 api.login<R>(body, config?)      // authenticate + store tokens
 api.logout<R>(config?)           // clear tokens everywhere
 api.setTokens({ accessToken, refreshToken, expiresAt? })
-api.refresh()                    // force a refresh; null on failure
+api.refresh()                    // force a refresh; true / false. Never the
+                                 // token — it stays in the worker (or store)
 api.getAuthState()               // { isAuthenticated, expiresAt, user }
 api.restoreSession("/api/auth/me") // cookie mode: detect an existing session on boot
 api.onAuthStateChange(listener)  // returns unsubscribe

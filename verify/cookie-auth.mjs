@@ -177,6 +177,11 @@ const server = createServer(async (req, res) => {
       : json(401, { message: "unauthenticated" });
   }
 
+  // Public: succeeds for anonymous visitors too — the false-positive probe.
+  if (req.url === "/api/public") {
+    return json(200, { data: { ok: true } });
+  }
+
   return json(404, { message: "not found" });
 });
 
@@ -263,6 +268,30 @@ try {
         `${mode}: getAuthState agrees afterwards`,
         (await api.getAuthState()).isAuthenticated === true,
       );
+      api.destroy();
+    }
+
+    console.log(`\n[${mode}] public 2xx does not assert a session`);
+
+    {
+      jar = "";
+      sessions = new Set();
+      const api = make(worker);
+      check(`${mode}: fresh visitor starts logged out`, (await api.getAuthState()).isAuthenticated === false);
+
+      // A public endpoint 200s for everyone — that must not flip the flag.
+      const pub = await api.get("/api/public");
+      check(`${mode}: public endpoint succeeds`, pub.status === true);
+      check(
+        `${mode}: still treated as logged out (was: any 2xx marked authenticated)`,
+        (await api.getAuthState()).isAuthenticated === false,
+      );
+
+      // The explicit probe is what asserts the session.
+      // (Login restores the shared jar so the following blocks keep working.)
+      await api.login({ email: "test@example.com", password: "password" });
+      const restored = await api.restoreSession("/api/auth/me");
+      check(`${mode}: restoreSession still asserts the session`, restored.isAuthenticated === true);
       api.destroy();
     }
 

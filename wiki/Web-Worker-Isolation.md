@@ -33,7 +33,7 @@ An XSS payload running on your page has no variable to read and no storage key t
 | Host → worker | Serializable options, method, URL, body, serializable config |
 | Worker → host | `IRes` envelopes, `AuthState`, `LogEntry`, ready/failure signals |
 
-Never a token, in either direction.
+Never a token, in either direction. A login response usually contains the tokens themselves, so the worker strips every known token field from `result.data` before the envelope is posted back — the extractor has already captured them into the worker's closure, and the main thread receives the rest of the payload (`user`, `message`, …).
 
 ---
 
@@ -87,7 +87,16 @@ Older browsers fall back to `child-src blob:`. Without it, `new Worker(blobUrl)`
 
 ### 1. Function options don't cross
 
-`extractTokens` and `buildRefreshBody` disable worker mode entirely. These are applied on the **host** instead, so they keep working:
+`extractTokens` and `buildRefreshBody` disable worker mode **only when passed as functions** — a function cannot be structured-cloned. Their declarative forms are plain data and cross fine:
+
+```ts
+createClient({
+  extractTokens: { accessKeys: ["jwt"], refreshKeys: ["renew"], roots: ["result"] },
+  buildRefreshBody: { field: "refresh_token" },
+});
+```
+
+Other function options are applied on the **host** instead, so they keep working:
 
 | Option | Handling |
 |---|---|
@@ -99,7 +108,11 @@ Older browsers fall back to `child-src blob:`. Without it, `new Worker(blobUrl)`
 
 Observable behaviour is identical.
 
-### 2. `ReadableStream` bodies are rejected
+### 2. The `login()` response is stripped of tokens
+
+The response body that carries the tokens stays where the tokens stay. `api.login()` resolves on the main thread with the sanitized payload — the token fields are removed before the envelope crosses the boundary.
+
+### 3. `ReadableStream` bodies are rejected
 
 A stream cannot be structured-cloned. Rather than an opaque `DataCloneError` from `postMessage`, you get:
 
@@ -107,11 +120,11 @@ A stream cannot be structured-cloned. Rather than an opaque `DataCloneError` fro
 
 `FormData`, `File`, `Blob`, `ArrayBuffer` and typed arrays are all transferable and work fine.
 
-### 3. CSRF cookies are read on the host
+### 4. CSRF cookies are read on the host
 
 Workers have no `document`. The host reads `document.cookie` (or calls your `getCsrfToken`) and mirrors the value into the request headers before posting. See [[CSRF Protection]].
 
-### 4. Storage is owned by the host
+### 5. Storage is owned by the host
 
 `localStorage`, `sessionStorage` and `document.cookie` are Window APIs that simply don't exist in a worker. So the adapter — whether a string kind or your own object — is built on the **main thread**, and the worker persists through it over an internal `storage` message.
 

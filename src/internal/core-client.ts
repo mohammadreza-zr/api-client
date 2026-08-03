@@ -6,6 +6,7 @@ import type {
   IRes,
   PendingRequest,
   RequestConfig,
+  TokenExtractor,
   TokenPair,
 } from "../types";
 import { AuthStore } from "./auth-store";
@@ -19,7 +20,7 @@ import {
   type CancelDefaults,
 } from "./cancel";
 import { executeRequest, type EngineContext } from "./engine";
-import { defaultExtractTokens, extractUser } from "./extract";
+import { extractUser, normalizeExtractor, normalizeRefreshBody } from "./extract";
 import { detectBaseUrl } from "./env";
 import { resolveStorage } from "./storage";
 import { joinUrl } from "./url";
@@ -52,8 +53,8 @@ export class CoreClient {
     >
   >;
   private defaultHeaders: Record<string, string>;
-  private extractTokens: NonNullable<ClientOptions["extractTokens"]>;
-  private buildRefreshBody: NonNullable<ClientOptions["buildRefreshBody"]>;
+  private extractTokens: TokenExtractor;
+  private buildRefreshBody: (refresh?: string) => unknown;
   private xsrfCookieName?: string;
   private xsrfHeaderName: string;
   private csrfProvider?: () => string | undefined;
@@ -82,8 +83,10 @@ export class CoreClient {
     this.xsrfCookieName = options.xsrfCookieName;
     this.xsrfHeaderName = options.xsrfHeaderName ?? "X-CSRF-Token";
     this.csrfProvider = options.getCsrfToken;
-    this.extractTokens = options.extractTokens ?? defaultExtractTokens;
-    this.buildRefreshBody = options.buildRefreshBody ?? ((refresh) => (refresh ? { refresh } : {}));
+    // Accepts both the function forms and the declarative (serializable)
+    // TokenFieldMap / RefreshBodyConfig forms.
+    this.extractTokens = normalizeExtractor(options.extractTokens);
+    this.buildRefreshBody = normalizeRefreshBody(options.buildRefreshBody);
     this.hooks = {
       onAuthStateChanged: options.onAuthStateChanged,
       onAuthFailure: options.onAuthFailure,
@@ -179,8 +182,12 @@ export class CoreClient {
   /**
    * Refreshes the access token.
    * Concurrent callers share one network call; other tabs are told the result.
+   *
+   * Returns `true` on success, `false` on failure. Only a **server
+   * rejection** ends the session; a network failure leaves it intact — a
+   * subway tunnel is not a logout.
    */
-  async refresh(): Promise<string | null> {
+  async refresh(): Promise<boolean> {
     return this.auth.coalesceRefresh(async () => {
       // Let whichever tab claimed leadership drive; others still await their
       // own call, which is harmless and keeps them correct if the leader dies.
@@ -192,42 +199,56 @@ export class CoreClient {
       // Header mode with no refresh token cannot possibly succeed.
       if (this.opts.authMode === "header" && !this.auth.refreshToken) {
         this.failAuth();
-        return null;
+        return false;
       }
 
+      let response: Response;
       try {
-        const response = await fetch(url, {
+        response = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...this.defaultHeaders },
           credentials: this.opts.credentials,
           body: body === undefined ? undefined : JSON.stringify(body),
         });
-
-        if (!response.ok) {
-          this.failAuth();
-          return null;
-        }
-
-        const payload = await response.json().catch(() => undefined);
-        const tokens = this.extractTokens(payload);
-
-        if (tokens?.accessToken || tokens?.refreshToken) {
-          this.auth.apply(tokens);
-        } else if (this.opts.authMode === "cookie") {
-          // Server rotated httpOnly cookies and returned no body.
-          this.auth.apply({ expiresAt: undefined });
-          this.auth.markSession(true);
-        } else {
-          this.failAuth();
-          return null;
-        }
-
-        this.tabs.post({ type: "refreshed", tabId: this.tabs.tabId, expiresAt: this.auth.expiresAt });
-        return this.auth.accessToken ?? "";
       } catch {
-        this.failAuth();
-        return null;
+        /*
+         * The network failed — offline, DNS, a dropped connection, a timeout.
+         * That says nothing about the session: the stored tokens may be
+         * perfectly valid, so clearing them here would log the user out of
+         * every tab on a network blip. Report the failure to the caller and
+         * leave auth alone; the request that hit the 401 surfaces as 401.
+         */
+        return false;
       }
+
+      // The server answered. Only an authentication rejection — 401/403 from
+      // the refresh endpoint — is the server's verdict that the session is
+      // dead, so that is the only case that tears auth down everywhere.
+      // Anything else (a 5xx, a rate-limit 429, a 400 from a bad request) is
+      // a server-side problem that says nothing about the session, so leave
+      // it intact exactly like a network failure.
+      if (response.status === 401 || response.status === 403) {
+        this.failAuth();
+        return false;
+      }
+      if (!response.ok) return false;
+
+      const payload = await response.json().catch(() => undefined);
+      const tokens = this.extractTokens(payload);
+
+      if (tokens?.accessToken || tokens?.refreshToken) {
+        this.auth.apply(tokens);
+      } else if (this.opts.authMode === "cookie") {
+        // Server rotated httpOnly cookies and returned no body.
+        this.auth.apply({ expiresAt: undefined });
+        this.auth.markSession(true);
+      } else {
+        this.failAuth();
+        return false;
+      }
+
+      this.tabs.post({ type: "refreshed", tabId: this.tabs.tabId, expiresAt: this.auth.expiresAt });
+      return true;
     });
   }
 
@@ -279,13 +300,20 @@ export class CoreClient {
      *
      * The cookie is httpOnly, so on a fresh page load there is nothing to
      * read and no way to know whether a session exists until a request is
-     * made. Any authenticated 2xx proves one does; a 401/403 that survived
-     * the refresh-and-retry flow proves one doesn't.
+     * made.
+     *
+     * Only the *negative* direction is inferred here: a 401/403 that
+     * survived the refresh-and-retry flow proves there is no session. A 2xx
+     * proves nothing by itself — public endpoints return 200 to anonymous
+     * visitors too — so marking the session active from any success would
+     * report logged-out users as authenticated. The positive direction is
+     * asserted explicitly, where the server's answer actually means it:
+     * `login()`, a successful `refresh()`, and `restoreSession()` (the
+     * caller names an endpoint that requires a session) all call
+     * `markSession(true)` themselves.
      */
     if (this.opts.authMode === "cookie" && !config?.skipAuth) {
-      if (result.status) {
-        this.auth.markSession(true);
-      } else if (result.statusCode === 401 || result.statusCode === 403) {
+      if (result.statusCode === 401 || result.statusCode === 403) {
         this.auth.markSession(false);
       }
     }
@@ -440,6 +468,14 @@ export class CoreClient {
       if (probe.status) {
         const user = extractUser(probe.data) ?? probe.data;
         if (user !== undefined) this.auth.setUser(user);
+        /*
+         * The caller explicitly asked "is there a session?" against an
+         * endpoint they chose because it requires one — a 2xx from it is the
+         * server's answer. This is the one place a plain success may assert
+         * the session; ordinary requests never do (a public endpoint 200s
+         * for anonymous visitors too).
+         */
+        this.auth.markSession(true);
       }
       return this.auth.state;
     }

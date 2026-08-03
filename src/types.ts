@@ -391,6 +391,53 @@ export interface TokenPair {
 /** Maps a login/refresh response body onto tokens the client can use. */
 export type TokenExtractor = (body: unknown) => TokenPair | null;
 
+/**
+ * Declarative token extraction — the worker-mode-friendly alternative to a
+ * custom `extractTokens` function.
+ *
+ * A function cannot be structured-cloned into the request worker, so the
+ * function form silently disables worker isolation. This plain-data map is
+ * serializable, so the same custom shapes keep worker mode on:
+ *
+ * ```ts
+ * createClient({
+ *   // body: { result: { jwt: "…", renew: "…", expires_in: 900 } }
+ *   extractTokens: {
+ *     accessKeys: ["jwt"],
+ *     refreshKeys: ["renew"],
+ *     expiresInKeys: ["expires_in"],
+ *     roots: ["result"],
+ *   },
+ * });
+ * ```
+ */
+export interface TokenFieldMap {
+  /** Key names for the access token, in priority order. Defaults: `access`, `accessToken`, `access_token`, `token`, `jwt`, `idToken`, `id_token`. */
+  accessKeys?: string[];
+  /** Key names for the refresh token, in priority order. Defaults: `refresh`, `refreshToken`, `refresh_token`. */
+  refreshKeys?: string[];
+  /** Key names for an absolute expiry timestamp (epoch seconds or milliseconds). Defaults: `expiresAt`, `expires_at`, `expiry`. */
+  expiryKeys?: string[];
+  /** Key names for an expiry given as a duration in seconds. Defaults: `expiresIn`, `expires_in`. */
+  expiresInKeys?: string[];
+  /** Top-level keys whose object value is searched for the above. Defaults: `data`, `tokens`, `result`, `payload`. */
+  roots?: string[];
+}
+
+/**
+ * Declarative refresh-request body — the worker-mode-friendly alternative to
+ * a custom `buildRefreshBody` function. Plain data, so worker mode stays on:
+ *
+ * ```ts
+ * createClient({ buildRefreshBody: { field: "refresh_token" } });
+ * // → { "refresh_token": "<token>" }
+ * ```
+ */
+export interface RefreshBodyConfig {
+  /** JSON field the refresh token is sent under. Default `"refresh"`. */
+  field?: string;
+}
+
 // ── Storage ──────────────────────────────────────────────
 
 /** Pluggable token persistence. Implement to back tokens with anything. */
@@ -540,19 +587,38 @@ export interface ClientOptions {
 
   /**
    * Pull tokens out of a login/refresh response body.
+   *
+   * Pass a function for arbitrary shapes, or a {@link TokenFieldMap} for the
+   * common custom-key/custom-nesting cases. **Worker mode caveat:** a
+   * function cannot be structured-cloned into the request worker, so the
+   * function form disables worker isolation; the declarative map keeps it.
+   *
    * Defaults to a forgiving extractor that understands `access`/`refresh`,
-   * `access_token`/`refresh_token`, `accessToken`/`refreshToken`,
-   * and the same keys nested under `data`.
+   * `access_token`/`refresh_token`, `accessToken`/`refreshToken`, and the
+   * same keys nested under `data`, `tokens`, `result` or `payload`.
    */
-  extractTokens?: TokenExtractor;
+  extractTokens?: TokenExtractor | TokenFieldMap;
 
-  /** Build the refresh request body. Default `{ refresh: <refreshToken> }`. */
-  buildRefreshBody?: (refreshToken?: string) => unknown;
+  /**
+   * Build the refresh request body. Default `{ refresh: <refreshToken> }`.
+   *
+   * Pass a function for arbitrary shapes, or a {@link RefreshBodyConfig} for
+   * the common "send it under a different field" case. **Worker mode
+   * caveat:** a function cannot be structured-cloned into the request
+   * worker, so the function form disables worker isolation; the declarative
+   * config keeps it.
+   */
+  buildRefreshBody?: ((refreshToken?: string) => unknown) | RefreshBodyConfig;
 
   /** Called whenever auth state changes. Never receives tokens. */
   onAuthStateChanged?: (state: AuthState) => void;
 
-  /** Called when auth is permanently lost (refresh rejected, logout). */
+  /**
+   * Called when auth is permanently lost — the refresh endpoint rejected the
+   * authentication (401/403), or a logout (local or in another tab) happened.
+   * Not called for server errors (5xx) or network failures during a refresh:
+   * neither is proof the session died.
+   */
   onAuthFailure?: () => void;
 
   /** Called for every failed request unless `hideErrorMessage` is set. */

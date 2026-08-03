@@ -14,10 +14,10 @@ export interface EngineContext {
   getAccessToken(): string | undefined;
 
   /**
-   * Runs the refresh flow. Returns the new access token, `""` when the server
-   * only rotated httpOnly cookies, or `null` when refresh failed.
+   * Runs the refresh flow. `true` when the session is usable again, `false`
+   * when the refresh failed (network trouble or a rejected session).
    */
-  refresh(): Promise<string | null>;
+  refresh(): Promise<boolean>;
 
   /**
    * Proactive refresh check, run before the first attempt.
@@ -294,6 +294,21 @@ export async function executeRequest<R>(
 
       try {
         return await fetch(finalUrl, init);
+      } catch (error) {
+        /*
+         * Safari (WebKit bug 246069, still open in 18.x) rejects an in-flight
+         * abort with a bare "AbortError" DOMException and drops the abort
+         * reason, so `error.name` cannot tell a timeout from a cancellation
+         * there. The signal we handed to fetch is authoritative: if its abort
+         * reason is a TimeoutError, the timeout is what fired. Rethrow a clean
+         * TimeoutError so `applyFailure` reports 408 on every engine — this
+         * also covers caller-supplied `AbortSignal.timeout()` signals.
+         */
+        const reason = signal.reason as { name?: string } | undefined;
+        if (reason?.name === "TimeoutError") {
+          throw new DOMException("Request timed out", "TimeoutError");
+        }
+        throw error;
       } finally {
         if (timer) clearTimeout(timer);
         // Detach from the long-lived cancel signal; a scope controller would
@@ -306,8 +321,8 @@ export async function executeRequest<R>(
 
     // 401 → refresh once → retry once.
     if (response.status === 401 && wantsAuth) {
-      const token = await ctx.refresh();
-      if (token !== null) {
+      const refreshed = await ctx.refresh();
+      if (refreshed) {
         if (singleUse) {
           /*
            * The stream was consumed by the first attempt, so replaying it
@@ -401,11 +416,13 @@ async function parseBody(response: Response): Promise<unknown> {
 
 /** Normalizes thrown errors (cancel, abort, timeout, offline, bad URL) into the envelope. */
 function applyFailure(result: IRes<unknown>, error: unknown): void {
-  const err = error as { name?: string; message?: string } | undefined;
+  const err = error as { name?: string; message?: string; cause?: { name?: string } } | undefined;
   result.status = false;
   result.error = error;
 
-  if (err?.name === "TimeoutError") {
+  // `cause` catches engines that reject aborts with an AbortError and expose
+  // the abort reason only through `error.cause` (older Chromium/Safari).
+  if (err?.name === "TimeoutError" || err?.cause?.name === "TimeoutError") {
     result.statusCode = 408;
     result.message = "Request timed out";
     return;

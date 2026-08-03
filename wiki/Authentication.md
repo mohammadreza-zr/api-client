@@ -207,13 +207,15 @@ The client therefore tracks the session from what the server actually does:
 | Event | `isAuthenticated` |
 |---|---|
 | `login()` returns 2xx | `true` |
-| any authenticated request returns 2xx | `true` |
+| `restoreSession()` probe returns 2xx | `true` |
 | a refresh succeeds | `true` |
 | a request 401/403s after the retry flow | `false` |
 | `logout()` | `false` |
 | a fresh page load | `false` **until you ask the server** |
 
-That last row is the important one. After a reload the cookie is still in the browser and requests will succeed — but the client has no way to know that yet. Ask explicitly, once, on startup:
+The positive direction is only ever asserted where the server's answer means it — `login()`, `refresh()` and the `restoreSession()` probe. An ordinary request that 2xxs proves **nothing**: public endpoints return 200 to anonymous visitors too, so a plain success never flips the flag (and a 404/500 never clears it). If an endpoint 401/403s after the refresh-and-retry flow, that is strong evidence the session is gone, and the flag flips to `false`.
+
+That "fresh page load" row is the important one. After a reload the cookie is still in the browser and requests will succeed — but the client has no way to know that yet. Ask explicitly, once, on startup:
 
 ```ts
 // Populates `user` too, if the endpoint returns one.
@@ -238,7 +240,7 @@ Multi-tab sync works in cookie mode too: the cookie is shared across tabs by the
 
 ### `onAuthFailure`
 
-Fires when auth is **permanently lost** — refresh rejected, logout, or another tab logging out. This is your redirect hook.
+Fires when auth is **permanently lost** — the server rejected a refresh (not a network blip, which leaves the session intact), a logout, or another tab logging out. This is your redirect hook.
 
 ```ts
 createClient({

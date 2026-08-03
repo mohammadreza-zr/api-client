@@ -33,7 +33,8 @@ import { WORKER_SOURCE } from "./worker-source";
  * the round trip so behaviour matches main-thread mode exactly.
  */
 export class WorkerHost {
-  private worker: Worker;
+  /** Assigned by `spawn()`; definite-assignment because the constructor only calls it indirectly. */
+  private worker!: Worker;
   private objectUrl: string | null = null;
   private seq = 0;
   /** In-flight RPC calls awaiting a worker reply, keyed by message id. */
@@ -41,10 +42,22 @@ export class WorkerHost {
     number,
     { resolve: (value: never) => void; reject: (error: Error) => void }
   >();
-  private ready: Promise<void>;
+  private ready!: Promise<void>;
+  /** Resolves the current `ready`, so a crash cannot strand its waiters. */
+  private resolveReady: () => void = () => {};
+  /**
+   * Serialized options, kept so a crashed worker can be re-spawned with the
+   * exact same configuration.
+   */
+  private serializableOptions: SerializableOptions;
+  /** True once the worker has crashed and cannot (or must not) be replaced. */
+  private crashed = false;
+  private crashError: Error | null = null;
+  /** Only one automatic restart is attempted; a second crash fails fast. */
+  private restartAttempted = false;
+  private destroyed = false;
   private listeners = new Set<(state: AuthState) => void>();
   private hooks: Pick<ClientOptions, "onAuthStateChanged" | "onAuthFailure" | "onError" | "onLog">;
-  private lastState: AuthState = { isAuthenticated: false, expiresAt: null };
   private xsrfCookieName?: string;
   private xsrfHeaderName: string;
   private csrfProvider?: () => string | undefined;
@@ -59,8 +72,6 @@ export class WorkerHost {
    */
   private cancelDefaults: CancelDefaults;
   private registry = new CancelRegistry();
-  /** Maps a registry entry to the in-flight worker request id. */
-  private workerIds = new Map<number, number>();
   private baseUrl: string;
 
   constructor(options: ClientOptions) {
@@ -92,28 +103,91 @@ export class WorkerHost {
     this.storage =
       kind === "memory" ? null : resolveStorage(kind, options.storageKey ?? "apiclient");
 
-    const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
-    this.objectUrl = URL.createObjectURL(blob);
-    this.worker = new Worker(this.objectUrl);
+    this.serializableOptions = toSerializableOptions(options);
+    this.spawn();
+  }
 
-    this.worker.onmessage = (event: MessageEvent<WorkerMessage>) => this.receive(event.data);
-    this.worker.onerror = (event) => {
-      const error = new Error(event.message || "Worker crashed");
-      for (const [, entry] of this.calls) entry.reject(error);
-      this.calls.clear();
+  /**
+   * Creates the blob worker and wires it to this host.
+   *
+   * Called once from the constructor and again after a crash when the session
+   * is recoverable (persistent storage lives on the host, so a fresh worker
+   * can hydrate from it). The object URL is created once and reused; it is
+   * only revoked in `destroy()`.
+   */
+  private spawn(): void {
+    if (this.objectUrl === null) {
+      const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
+      this.objectUrl = URL.createObjectURL(blob);
+    }
+
+    const worker = new Worker(this.objectUrl);
+    this.worker = worker;
+
+    worker.onmessage = (event: MessageEvent<WorkerMessage>) => this.receive(event.data);
+    worker.onerror = (event) => {
+      // A stale error event from a replaced worker must not kill the new one.
+      if (this.worker !== worker) return;
+      this.crash(new Error(event.message || "Worker crashed"));
     };
 
     this.ready = new Promise<void>((resolve) => {
+      this.resolveReady = resolve;
       const onReady = (event: MessageEvent<WorkerMessage>) => {
         if (event.data?.kind === "ready") {
-          this.worker.removeEventListener("message", onReady);
+          worker.removeEventListener("message", onReady);
           resolve();
         }
       };
-      this.worker.addEventListener("message", onReady);
+      worker.addEventListener("message", onReady);
     });
 
-    this.dispatch({ kind: "init", options: toSerializableOptions(options) });
+    worker.postMessage({ kind: "init", options: this.serializableOptions });
+  }
+
+  /**
+   * Handles a dead worker.
+   *
+   * In-flight calls are rejected with an actionable message — a request must
+   * settle, never hang. When the session can be rebuilt (persistent storage
+   * lives on this side of the boundary), one automatic restart is attempted;
+   * otherwise the host fails fast from here on, because the tokens that died
+   * with the worker's closure cannot be recovered on the main thread.
+   */
+  private crash(error: Error): void {
+    if (this.crashed) return;
+    this.crashed = true;
+
+    const canRestart = !this.destroyed && this.storage !== null && !this.restartAttempted;
+    const message = canRestart
+      ? "The request worker crashed and is being restarted from host storage — retry the request."
+      : "The request worker crashed and cannot be restarted: the session lived in its " +
+        "closure and is lost. Recreate the client and re-authenticate, or pass " +
+        "worker: false to run on the main thread.";
+    const rejection = new Error(message);
+    // Attach the original reason; the message is what users read.
+    (rejection as { cause?: unknown }).cause = error;
+
+    // Unblock any caller still awaiting the boot message — with the worker
+    // gone it would otherwise wait forever.
+    this.resolveReady();
+
+    for (const [, entry] of this.calls) entry.reject(rejection);
+    this.calls.clear();
+
+    if (canRestart) {
+      this.restartAttempted = true;
+      try {
+        this.spawn();
+        this.crashed = false;
+        this.crashError = null;
+      } catch {
+        // Worker construction failed (e.g. CSP blocked the blob) — stay dead.
+        this.crashError = rejection;
+      }
+    } else {
+      this.crashError = rejection;
+    }
   }
 
   // ── plumbing ───────────────────────────────────────────
@@ -148,7 +222,6 @@ export class WorkerHost {
       }
 
       case "authChanged": {
-        this.lastState = msg.state;
         this.hooks.onAuthStateChanged?.(msg.state);
         for (const listener of this.listeners) {
           try {
@@ -210,11 +283,11 @@ export class WorkerHost {
   private async call<T>(
     build: (id: number) => HostMessage,
     signal?: AbortSignal | null,
-    onId?: (id: number) => void,
   ): Promise<T> {
     await this.ready;
+    if (this.destroyed) throw new Error("Client destroyed");
+    if (this.crashed) throw this.crashError ?? new Error("The request worker is unavailable");
     const id = ++this.seq;
-    onId?.(id);
 
     return new Promise<T>((resolve, reject) => {
       this.calls.set(id, { resolve: resolve as never, reject });
@@ -328,9 +401,6 @@ export class WorkerHost {
       result = await this.call<IRes<R>>(
         (id) => ({ kind: "request", id, method, url, body: payload, config: forwarded }),
         signal || tracked ? linked : undefined,
-        (id) => {
-          if (tracked) this.workerIds.set(tracked.id, id);
-        },
       );
     } catch (error) {
       const canceled = (error as Error)?.name === "AbortError";
@@ -350,10 +420,7 @@ export class WorkerHost {
       }
     } finally {
       release();
-      if (tracked) {
-        this.workerIds.delete(tracked.id);
-        tracked.release();
-      }
+      tracked?.release();
     }
 
     // Re-apply the transforms the structured-clone boundary could not carry.
@@ -431,26 +498,32 @@ export class WorkerHost {
     return this.call<AuthState>((id) => ({ kind: "authState", id }));
   }
 
-  async refresh(): Promise<string | null> {
-    const ok = await this.call<boolean>((id) => ({ kind: "refresh", id }));
+  refresh(): Promise<boolean> {
     // The token itself intentionally never leaves the worker.
-    return ok ? "" : null;
+    return this.call<boolean>((id) => ({ kind: "refresh", id }));
   }
 
   onAuthStateChange(listener: (state: AuthState) => void): () => void {
+    /*
+     * Deliberately no immediate call with a cached state: the first auth
+     * snapshot may not have crossed the boundary yet (the worker hydrates
+     * asynchronously), and firing `{ isAuthenticated: false }` at subscribe
+     * time would make apps redirect to /login before the real state arrives.
+     * This matches the inline implementation, which only fires on actual
+     * changes. Use `getAuthState()` for the current snapshot.
+     */
     this.listeners.add(listener);
-    listener(this.lastState);
     return () => this.listeners.delete(listener);
   }
 
   destroy(): void {
+    this.destroyed = true;
     try {
       this.dispatch({ kind: "destroy" });
     } catch {
       /* already gone */
     }
     this.registry.cancel(undefined, "client destroyed");
-    this.workerIds.clear();
     this.worker.terminate();
     for (const [, entry] of this.calls) entry.reject(new Error("Client destroyed"));
     this.calls.clear();
@@ -476,8 +549,8 @@ function pageOrigin(): string {
 function toSerializableOptions(options: ClientOptions): SerializableOptions {
   const {
     storage,
-    extractTokens: _extract,
-    buildRefreshBody: _build,
+    extractTokens,
+    buildRefreshBody,
     onAuthStateChanged: _a,
     onAuthFailure: _b,
     onError: _c,
@@ -493,6 +566,13 @@ function toSerializableOptions(options: ClientOptions): SerializableOptions {
 
   return {
     ...rest,
+    /*
+     * Function forms disable worker mode upstream, so only the declarative
+     * (serializable) forms can reach this point. Forward them so the worker
+     * builds the same extractor / refresh body the host would.
+     */
+    extractTokens: typeof extractTokens === "function" ? undefined : extractTokens,
+    buildRefreshBody: typeof buildRefreshBody === "function" ? undefined : buildRefreshBody,
     /*
      * Forward only the *kind*, so the worker knows whether to persist at all.
      * A custom adapter object is served from the host, and is reported to the

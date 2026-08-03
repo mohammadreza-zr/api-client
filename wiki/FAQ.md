@@ -67,7 +67,7 @@ Exactly **one** refresh call. `AuthStore.coalesceRefresh` hands every concurrent
 
 ### Are tokens really never on the main thread?
 
-In worker mode with `storage: "memory"`: yes. They live in the worker's closure, and only `AuthState` (booleans, timestamps, `user`) crosses the boundary. With `storage: "local"` the persisted copy is readable by page scripts regardless of worker mode.
+In worker mode with `storage: "memory"`: yes. They live in the worker's closure, and only `AuthState` (booleans, timestamps, `user`) crosses the boundary. Even the `login()` response — which usually contains the tokens — is stripped of its token fields before it resolves on the main thread. With `storage: "local"` the persisted copy is readable by page scripts regardless of worker mode. One caveat: the **function** forms of `extractTokens` and `buildRefreshBody` cannot cross the boundary, so passing a function disables worker mode (inline fallback) — the declarative `TokenFieldMap` / `RefreshBodyConfig` forms keep it.
 
 ### Does worker isolation stop XSS?
 
@@ -105,7 +105,7 @@ There are no interceptors, but the equivalents exist: `headers`, `beforeFunc`, `
 
 ### Why do custom functions disable worker mode?
 
-Functions can't be structured-cloned across a `postMessage` boundary. `extractTokens` and `buildRefreshBody` run inside the request pipeline, so they must live where the pipeline does. Other function options (`getCsrfToken`, `beforeFunc`, `afterFunc`, callbacks) run on the host and keep worker mode.
+Functions can't be structured-cloned across a `postMessage` boundary. `extractTokens` and `buildRefreshBody` run inside the request pipeline, so a **function** form must live where the pipeline does and disables worker mode. Both have declarative forms — `TokenFieldMap` / `RefreshBodyConfig` — that are plain data and keep worker mode on. Other function options (`getCsrfToken`, `beforeFunc`, `afterFunc`, callbacks) run on the host and keep worker mode.
 
 ### How do I know which mode I'm in?
 

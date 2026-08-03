@@ -124,13 +124,23 @@ Full guide: **[[Cancellation]]**.
 
 ## Options that disable worker mode
 
-Three options cannot be structured-cloned into a worker, so supplying any of them silently drops the client to the main thread:
+Two options cannot be structured-cloned into a worker **when passed as functions**, and supplying a function silently drops the client to the main thread:
 
 ```ts
-createClient({ storage: { get, set, clear } }); // a custom adapter object
-createClient({ extractTokens: (b) => … });
-createClient({ buildRefreshBody: (r) => … });
+createClient({ extractTokens: (b) => … });        // function → inline mode
+createClient({ buildRefreshBody: (r) => … });     // function → inline mode
 ```
+
+Both have **declarative forms** that are plain data and keep worker isolation:
+
+```ts
+createClient({
+  extractTokens: { accessKeys: ["jwt"], refreshKeys: ["renew"], roots: ["result"] },
+  buildRefreshBody: { field: "refresh_token" },
+});
+```
+
+A custom storage adapter object is served from the host over the storage bridge and does **not** disable worker mode.
 
 Always verify:
 

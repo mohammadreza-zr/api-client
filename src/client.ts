@@ -34,8 +34,17 @@ export interface ApiClient {
   /** Seed tokens from SSR, an OAuth callback, or your own login flow. */
   setTokens(tokens: TokenPair): Promise<void>;
 
-  /** Force a token refresh. Returns `null` when it failed. */
-  refresh(): Promise<string | null>;
+  /**
+   * Force a token refresh. Resolves `true` when the session is usable again,
+   * `false` when the refresh failed.
+   *
+   * Returns a boolean rather than the new token: the token never leaves the
+   * worker, and whether the refresh *worked* is all a caller can act on.
+   * `false` only clears the session when the refresh endpoint rejected the
+   * authentication (401/403). Server errors (5xx) and network failures leave
+   * the session intact — a blip is not a logout.
+   */
+  refresh(): Promise<boolean>;
 
   /** Current auth state. Never contains tokens. */
   getAuthState(): Promise<AuthState>;
@@ -170,8 +179,13 @@ export function createClient(options: ClientOptions = {}): ApiClient {
     WORKER_SOURCE.length > 0 &&
     // A custom storage object stays on the main thread and is served to the
     // worker over the storage bridge, so it no longer forces inline mode.
-    !options.extractTokens &&
-    !options.buildRefreshBody;
+    //
+    // Only the *function* forms of extractTokens / buildRefreshBody force
+    // inline mode: functions cannot be structured-cloned into the worker.
+    // The declarative TokenFieldMap / RefreshBodyConfig forms are plain data
+    // and keep worker isolation.
+    typeof options.extractTokens !== "function" &&
+    typeof options.buildRefreshBody !== "function";
 
   if (canUseWorker) {
     try {
