@@ -114,7 +114,7 @@ Return `null` when the body contains no tokens; the client treats that as a fail
 
 `extractTokens` is used by **both** `login()` and `refresh()`, so one function covers both.
 
-> ⚠️ `extractTokens` and `buildRefreshBody` are functions and cannot be structured-cloned into a Web Worker. Supplying either **automatically disables worker mode**. See [[Web Worker Isolation]].
+> ⚠️ The **function** forms of `extractTokens` and `buildRefreshBody` cannot be structured-cloned into a Web Worker, so a function automatically disables worker mode. Their declarative forms — `TokenFieldMap` and `RefreshBodyConfig` — are plain data and keep worker mode on. See [[Web Worker Isolation]].
 
 ---
 
@@ -133,10 +133,12 @@ Return `null` when the body contains no tokens; the client treats that as a fail
 ## Manual refresh
 
 ```ts
-const token = await api.refresh();
-// string  → new access token ("" in cookie mode)
-// null    → refresh failed; auth has been cleared
+const ok = await api.refresh();
+// true  → session is usable again
+// false → refresh failed
 ```
+
+The new token is never returned — in worker mode it deliberately never leaves the worker, and in every mode the boolean is all a caller can act on. A `false` from a **server rejection** (non-2xx from the refresh endpoint) clears the session everywhere and fires `onAuthFailure`. A `false` from a **network failure** (offline, DNS, timeout) leaves the session intact — a blip is not a logout, so the user is not thrown out of every tab because the train went through a tunnel.
 
 Rarely needed — the automatic paths cover normal use. It is handy for a "keep me signed in" heartbeat or right before a long operation:
 

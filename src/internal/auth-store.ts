@@ -22,7 +22,7 @@ export class AuthStore {
    */
   private session = false;
 
-  private inFlight: Promise<string | null> | null = null;
+  private inFlight: Promise<unknown> | null = null;
   private listeners = new Set<(state: AuthState) => void>();
   /** The most recent persist, so callers can await durability. */
   private pendingWrite: Promise<void> = Promise.resolve();
@@ -147,14 +147,14 @@ export class AuthStore {
    * Runs `task` as the single in-flight refresh.
    * Concurrent callers await the same promise instead of stampeding the server.
    */
-  coalesceRefresh(task: () => Promise<string | null>): Promise<string | null> {
-    if (this.inFlight) return this.inFlight;
+  coalesceRefresh<T>(task: () => Promise<T>): Promise<T> {
+    if (this.inFlight) return this.inFlight as Promise<T>;
 
     this.inFlight = task().finally(() => {
       this.inFlight = null;
     });
 
-    return this.inFlight;
+    return this.inFlight as Promise<T>;
   }
 
   // ── observers ──────────────────────────────────────────

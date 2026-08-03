@@ -26,6 +26,9 @@ const check = (name, cond, detail = "") => {
 const raw = readFileSync("src/worker/worker-source.ts", "utf8");
 const WORKER_SOURCE = JSON.parse(raw.match(/WORKER_SOURCE = ("(?:[^"\\]|\\.)*")/s)[1]);
 
+/** Every fake worker created, so a test can crash the one a client owns. */
+const madeWorkers = [];
+
 /** Minimal but faithful DedicatedWorker emulation. */
 class FakeWorker {
   constructor() {
@@ -98,6 +101,7 @@ class FakeWorker {
     this._ctx = vm.createContext(scope);
     vm.runInContext(WORKER_SOURCE, this._ctx, { filename: "worker.js" });
     this._scope = scope;
+    madeWorkers.push(this);
   }
 
   postMessage(data) {
@@ -120,6 +124,10 @@ class FakeWorker {
   }
   terminate() {
     this._closed = true;
+  }
+  /** Fires the worker's `onerror` — what a real browser does on a crash. */
+  crashNow(message = "simulated worker crash") {
+    this.onerror?.({ message });
   }
 }
 
@@ -182,6 +190,19 @@ try {
   // auth in worker
   const login = await api.login({ password: "good" });
   check("login through worker", login.status === true);
+  check(
+    "worker: login response is stripped of tokens before crossing (was: access+refresh leaked)",
+    !JSON.stringify(login.data).includes("eyJ") && !JSON.stringify(login.data).includes("refresh-"),
+    JSON.stringify(login.data),
+  );
+  const loginFull = await api.login({ password: "good" }, { fullData: true });
+  check(
+    "worker: login stripped under fullData too (nested envelope)",
+    loginFull.status === true &&
+      !JSON.stringify(loginFull.data).includes("eyJ") &&
+      !JSON.stringify(loginFull.data).includes("refresh-"),
+    JSON.stringify(loginFull.data),
+  );
   const st = await api.getAuthState();
   check("auth state readable", st.isAuthenticated === true);
   check("auth state carries NO tokens", !("accessToken" in st) && !JSON.stringify(st).includes("eyJ"));
@@ -189,6 +210,10 @@ try {
 
   const prot = await api.get("/protected");
   check("authorized request in worker", prot.status === true);
+
+  // refresh() is a boolean in worker mode too — never the token, never ""
+  const refreshed = await api.refresh();
+  check("worker: refresh() resolves boolean true", refreshed === true, String(refreshed));
 
   state.refreshCalls = 0;
   expireAccess();
@@ -204,8 +229,139 @@ try {
   await api.logout();
   check("logout in worker", (await api.getAuthState()).isAuthenticated === false);
 
+  // ── subscribe parity: inline mode never fires immediately, worker must not ──
+  {
+    const fresh = createClient({ baseUrl: BASE, multiTab: false, refreshSkewMs: 0, throwError: false });
+    let immediate = 0;
+    fresh.onAuthStateChange(() => immediate++);
+    await new Promise((r) => setTimeout(r, 60));
+    check("worker: onAuthStateChange does not fire with stale state on subscribe", immediate === 0, `got ${immediate}`);
+    fresh.destroy();
+  }
+
   api.destroy();
   check("destroy is clean", true);
+
+  // ── worker crash (memory mode): requests must settle, never hang ──
+  console.log("\nworker crash — memory mode");
+  {
+    const crashApi = createClient({ baseUrl: BASE, multiTab: false, refreshSkewMs: 0, throwError: false });
+    await crashApi.login({ password: "good" });
+    check("crash test: session established", (await crashApi.getAuthState()).isAuthenticated === true);
+
+    const owner = madeWorkers.at(-1);
+    const inFlight = crashApi.get("/slow"); // /slow sleeps 2s — still in flight
+    await new Promise((r) => setTimeout(r, 150));
+    owner.crashNow();
+
+    const t0 = Date.now();
+    const inFlightRes = await inFlight;
+    check(
+      "crash: in-flight request settles (was: hung forever)",
+      inFlightRes.status === false && inFlightRes.statusCode === 500,
+      JSON.stringify(inFlightRes.message),
+    );
+
+    const after = await crashApi.get("/echo");
+    check(
+      "crash: subsequent requests fail fast with an actionable message",
+      after.status === false && after.statusCode === 500 && /crash/i.test(after.message),
+      JSON.stringify(after.message),
+    );
+    check("crash: fail-fast is immediate", Date.now() - t0 < 1000);
+
+    // destroy after a crash must not throw either.
+    crashApi.destroy();
+    check("crash: destroy after crash is clean", true);
+  }
+
+  // ── worker crash (persistent storage): one automatic restart, session kept ──
+  console.log("\nworker crash — host storage restart");
+  {
+    let stored = null;
+    const storage = {
+      get: () => stored,
+      set: (tokens) => {
+        stored = tokens;
+      },
+      clear: () => {
+        stored = null;
+      },
+    };
+
+    const crashApi = createClient({
+      baseUrl: BASE,
+      multiTab: false,
+      refreshSkewMs: 0,
+      throwError: false,
+      storage,
+    });
+    await crashApi.login({ password: "good" });
+    check("restart test: session established and persisted", (await crashApi.getAuthState()).isAuthenticated === true);
+    check("restart test: tokens live on the host", stored !== null);
+
+    madeWorkers.at(-1).crashNow();
+
+    // The restarted worker hydrates from host storage; the request must work.
+    const res = await crashApi.get("/protected");
+    check("crash: worker restarted from host storage, request succeeds", res.status === true, JSON.stringify(res.message));
+    check("crash: session survived the restart", (await crashApi.getAuthState()).isAuthenticated === true);
+
+    // A second crash must NOT restart again — it fails fast.
+    madeWorkers.at(-1).crashNow();
+    const second = await crashApi.get("/echo");
+    check(
+      "crash: a second crash fails fast (single restart only)",
+      second.status === false && /cannot be restarted/i.test(second.message),
+      JSON.stringify(second.message),
+    );
+    crashApi.destroy();
+  }
+
+  // ── declarative extractTokens / buildRefreshBody keep worker mode ──
+  console.log("\nworker mode with declarative token mapping");
+  {
+    const mapped = createClient({
+      baseUrl: BASE,
+      multiTab: false,
+      refreshSkewMs: 0,
+      throwError: false,
+      loginUrl: "/auth/login-exotic",
+      refreshUrl: "/auth/refresh-exotic",
+      // Exotic shape: { result: { jwt, renew, expires_in } } — nothing under
+      // the default keys. Plain data, so worker mode must stay on.
+      extractTokens: { accessKeys: ["jwt"], refreshKeys: ["renew"], expiresInKeys: ["expires_in"], roots: ["result"] },
+      buildRefreshBody: { field: "refresh_token" },
+    });
+    check(
+      "mapping: worker mode engaged (was: forced inline by functions)",
+      mapped.isWorker === true,
+    );
+
+    const ml = await mapped.login({ password: "good" });
+    check("mapping: custom-shape login succeeds", ml.status === true);
+    check(
+      "mapping: custom token keys are stripped from the login response too",
+      !JSON.stringify(ml.data).includes("eyJ") && !JSON.stringify(ml.data).includes("renew"),
+      JSON.stringify(ml.data),
+    );
+    check("mapping: session established", (await mapped.getAuthState()).isAuthenticated === true);
+
+    const mp = await mapped.get("/protected");
+    check("mapping: authorized request works", mp.status === true);
+
+    // 401 → refresh with the declarative body shape
+    state.refreshCalls = 0;
+    expireAccess();
+    const mr = await mapped.get("/protected");
+    check("mapping: refresh + retry works", mr.status === true);
+    check(
+      "mapping: refresh body sent under the custom field",
+      state.lastRefreshBody?.refresh_token === state.validRefresh,
+      JSON.stringify(state.lastRefreshBody),
+    );
+    mapped.destroy();
+  }
 
   // ── client-wide throwError must behave identically in worker mode ──
   const strict = createClient({

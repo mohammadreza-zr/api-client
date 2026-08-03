@@ -2,6 +2,100 @@
 
 ## Unreleased
 
+### Breaking
+
+- **`api.refresh()` now returns `Promise<boolean>`** instead of the new
+  access token (`string`) or `null`. The token never leaves the worker (and
+  was returned as `""` there), and `true`/`false` is all a caller can act on:
+
+  ```ts
+  // before
+  const token = await api.refresh();
+  if (token === null) redirectToLogin();
+
+  // after
+  const ok = await api.refresh();
+  if (!ok && !(await api.getAuthState()).isAuthenticated) redirectToLogin();
+  ```
+
+  `TokenExtractor` and `buildRefreshBody` functions still work — see below.
+
+- **`extractTokens` / `buildRefreshBody` now accept declarative forms** in
+  addition to functions: `TokenFieldMap` and `RefreshBodyConfig`. The
+  function forms still work unchanged. See "Added".
+
+### Added
+
+- **Declarative, worker-safe token mapping.** `extractTokens` accepts a
+  `TokenFieldMap` (`accessKeys`, `refreshKeys`, `expiryKeys`,
+  `expiresInKeys`, `roots`) and `buildRefreshBody` accepts a
+  `RefreshBodyConfig` (`field`). Because these are plain data they can be
+  structured-cloned into the request worker — custom response shapes no
+  longer force the client out of worker isolation:
+
+  ```ts
+  createClient({
+    extractTokens: { accessKeys: ["jwt"], refreshKeys: ["renew"], roots: ["result"] },
+    buildRefreshBody: { field: "refresh_token" },
+  });
+  ```
+
+  The **function** forms still disable worker mode (a function cannot be
+  cloned across the boundary) — the previous documented behaviour.
+
+- **A crashed request worker no longer hangs requests.** The host now
+  handles `Worker.onerror`: in-flight calls reject with an actionable
+  message instead of never settling, subsequent calls fail fast, and when
+  tokens are recoverable (persistent storage lives on the host) the worker
+  is restarted once automatically and re-hydrates the session. With the
+  default `storage: "memory"` the session lived in the worker's closure and
+  is lost with it — the client says so clearly instead of hanging.
+
+### Fixed
+
+- **A network blip during refresh no longer logs out every tab.** Only a
+  **server rejection** of the refresh (a non-2xx response) clears auth,
+  broadcasts logout and fires `onAuthFailure`. A network failure (offline,
+  DNS, timeout) now reports the refresh as failed while leaving the session
+  intact — the request that hit the 401 surfaces as 401, and the user stays
+  signed in when the network comes back.
+
+- **Worker mode: the `login()` response no longer carries tokens to the main
+  thread.** The response body that contains the tokens was posted back inside
+  `result.data`, so an XSS payload on the page could read them straight off
+  the resolved promise — contradicting the isolation guarantee. Token fields
+  are now stripped before the envelope crosses the boundary; the extractor
+  still captures them into the worker's closure. (`fullData` included.)
+
+- **Cookie mode: a 2xx from a public endpoint no longer marks the user as
+  authenticated.** Any successful request (e.g. a public `/products` call made
+  while logged out) flipped `isAuthenticated` to `true`, because the session
+  flag was inferred from *any* 2xx. The positive direction is now asserted
+  only where the server's answer means it — `login()`, a successful
+  `refresh()`, and the `restoreSession()` probe. A 401/403 that survives the
+  retry flow still clears the flag.
+
+- **Timeouts are reported as `408` even when the engine drops the abort
+  reason.** Safari (WebKit bug 246069, still open in 18.x) rejects an
+  in-flight abort with a bare `AbortError` and discards the `TimeoutError`
+  reason, so a timeout was classified as a cancellation: it resolved silently
+  with `canceled: true` instead of throwing/408, and `onError` never fired.
+  The engine now classifies from the abort signal it handed to `fetch`, which
+  is authoritative on every engine (this also makes caller-supplied
+  `AbortSignal.timeout()` signals report 408).
+
+- **`onAuthStateChange` no longer fires immediately in worker mode** with a
+  stale `{ isAuthenticated: false }` snapshot before the worker has finished
+  hydrating (inline mode never fired immediately). Use `getAuthState()` for
+  the current snapshot. Worker and inline modes now behave identically.
+
+### Docs
+
+- `extractTokens` and `buildRefreshBody` disable worker mode (functions can't
+  be structured-cloned) — now called out in the README.
+- `api.refresh()` return value documented for worker mode (`""` on success:
+  the token never leaves the worker).
+
 ## 1.1.0 - 2026-07-28
 
 ### Added

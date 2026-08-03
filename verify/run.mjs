@@ -94,6 +94,45 @@ try {
   const midAbort = await inflight;
   check("mid-flight abort works", midAbort.statusCode === 0);
 
+  // Engines that drop the abort reason (Safari ≤ 18.x, WebKit bug 246069)
+  // must still report a timeout as 408 — not as a cancellation.
+  {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      try {
+        return await realFetch(input, init);
+      } catch (e) {
+        if (e?.name === "TimeoutError" || e?.name === "AbortError") {
+          throw new DOMException("The operation was aborted.", "AbortError");
+        }
+        throw e;
+      }
+    };
+    try {
+      const safari = createClient({ baseUrl: BASE, worker: false, refreshSkewMs: 0, onError: () => {} });
+      let threw = false;
+      let code = 0;
+      let canceled;
+      try {
+        const r = await safari.get("/slow", { timeout: 300 });
+        code = r.statusCode;
+        canceled = r.canceled;
+      } catch (e) {
+        threw = true;
+        code = e.statusCode;
+        canceled = e.canceled;
+      }
+      check(
+        "timeout stays 408 when the engine drops the abort reason (Safari)",
+        threw && code === 408 && canceled !== true,
+        `threw=${threw} code=${code} canceled=${canceled}`,
+      );
+      safari.destroy();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }
+
   // ── bad addToUrl ────────────────────────────────────────
   const falsy = await api.get("/echo", { addToUrl: [null] });
   check("falsy addToUrl is a failure, not fake 200 (was status:true/200)", falsy.status === false && falsy.statusCode === 0);
@@ -122,6 +161,10 @@ try {
 
   const prot = await auth.get("/protected");
   check("authorized request ok", prot.status === true);
+
+  // refresh() is a boolean verdict, not a token (the token never leaves the worker)
+  const manualRefresh = await auth.refresh();
+  check("refresh() resolves boolean true on success", manualRefresh === true, String(manualRefresh));
 
   // 401 → refresh → retry
   state.refreshCalls = 0;
@@ -155,6 +198,50 @@ try {
   const denied = await failing.get("/protected");
   check("failed refresh surfaces 401", denied.status === false);
   check("onAuthFailure fired", failed === true);
+
+  // A NETWORK failure during refresh must NOT end the session —
+  // only a server rejection does (a blip is not a logout).
+  {
+    let authFailures = 0;
+    const net = createClient({
+      baseUrl: BASE,
+      worker: false,
+      multiTab: false,
+      refreshSkewMs: 0,
+      throwError: false,
+      onAuthFailure: () => authFailures++,
+    });
+    await net.login({ password: "good" });
+    expireAccess();
+
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      if (String(input).includes("/auth/refresh")) {
+        throw new TypeError("network down");
+      }
+      return realFetch(input, init);
+    };
+    try {
+      const res = await net.get("/protected");
+      check("network-blip refresh: request surfaces 401", res.status === false && res.statusCode === 401);
+      const stateAfter = await net.getAuthState();
+      check(
+        "network-blip refresh: session survives (was: logged out of every tab)",
+        stateAfter.isAuthenticated === true,
+      );
+      check("network-blip refresh: onAuthFailure NOT fired", authFailures === 0, `got ${authFailures}`);
+      // A direct refresh() call also reports false without clearing auth.
+      const direct = await net.refresh();
+      check("network-blip refresh: refresh() resolves false", direct === false);
+      check("network-blip refresh: still authenticated after direct call", (await net.getAuthState()).isAuthenticated === true);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    // The session is genuinely usable once the network is back.
+    const recovered = await net.get("/protected");
+    check("network-blip refresh: request succeeds once the network is back", recovered.status === true);
+    net.destroy();
+  }
 
   // proactive refresh
   console.log("\nproactive refresh");

@@ -2,7 +2,7 @@
 import { createServer } from "node:http";
 
 let accessSeq = 0;
-const state = { refreshCalls: 0, protectedCalls: 0, validAccess: null, validRefresh: "refresh-1" };
+const state = { refreshCalls: 0, protectedCalls: 0, validAccess: null, validRefresh: "refresh-1", lastRefreshBody: null };
 
 function jwt(expSecondsFromNow) {
   const b = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
@@ -44,14 +44,44 @@ export function start(port = 4599) {
       });
     }
 
+    // Exotic shape for the declarative TokenFieldMap tests:
+    // { result: { jwt, renew } } — nothing under the default keys.
+    if (path === "/auth/login-exotic") {
+      const body = await readBody(req);
+      if (body.password !== "good") return send(res, 401, { message: "Bad credentials" });
+      state.validAccess = jwt(60);
+      accessSeq++;
+      return send(res, 200, {
+        result: { jwt: state.validAccess, renew: state.validRefresh, expires_in: 60 },
+        message: "ok",
+      });
+    }
+
     if (path === "/auth/refresh") {
       state.refreshCalls++;
       const body = await readBody(req);
-      if (body.refresh !== state.validRefresh) return send(res, 401, { message: "Bad refresh" });
+      // The default client sends { refresh }; a declarative buildRefreshBody
+      // may send it under a custom field.
+      state.lastRefreshBody = body;
+      if (body.refresh !== state.validRefresh && body.refresh_token !== state.validRefresh) {
+        return send(res, 401, { message: "Bad refresh" });
+      }
       await new Promise((r) => setTimeout(r, 60)); // window for stampede
       state.validAccess = jwt(60);
       accessSeq++;
       return send(res, 200, { data: { access: state.validAccess, refresh: state.validRefresh } });
+    }
+
+    // Exotic refresh for the TokenFieldMap tests: same shape as login-exotic.
+    if (path === "/auth/refresh-exotic") {
+      state.refreshCalls++;
+      const body = await readBody(req);
+      state.lastRefreshBody = body;
+      if (body.refresh_token !== state.validRefresh) return send(res, 401, { message: "Bad refresh" });
+      await new Promise((r) => setTimeout(r, 60)); // window for stampede
+      state.validAccess = jwt(60);
+      accessSeq++;
+      return send(res, 200, { result: { jwt: state.validAccess, renew: state.validRefresh, expires_in: 60 } });
     }
 
     if (path === "/auth/logout") return send(res, 200, { message: "bye" });

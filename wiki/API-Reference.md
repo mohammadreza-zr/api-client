@@ -107,14 +107,16 @@ await api.setTokens({ accessToken: undefined });      // local sign-out
 ### `refresh()`
 
 ```ts
-refresh(): Promise<string | null>;
+refresh(): Promise<boolean>;
 ```
 
-Forces a refresh. Returns the new access token (`""` in cookie mode) or `null` on failure. Coalesced with any in-flight refresh, so concurrent calls are safe.
+Forces a refresh. Resolves `true` when the session is usable again, `false` when the refresh failed. The new token itself is never returned — in worker mode it deliberately never leaves the worker, and in every mode `true`/`false` is all a caller can act on. Coalesced with any in-flight refresh, so concurrent calls are safe.
+
+A `false` from a **server rejection** (non-2xx from the refresh endpoint) clears the session everywhere and fires `onAuthFailure`. A `false` from a **network failure** (offline, DNS, timeout) leaves the session intact — a blip is not a logout.
 
 ```ts
-const token = await api.refresh();
-if (token === null) redirectToLogin();
+const ok = await api.refresh();
+if (!ok && !(await api.getAuthState()).isAuthenticated) redirectToLogin();
 ```
 
 ---

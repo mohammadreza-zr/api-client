@@ -24,9 +24,11 @@ export type {
   Ordering,
   Params,
   PendingRequest,
+  RefreshBodyConfig,
   RequestConfig,
   StorageKind,
   TokenExtractor,
+  TokenFieldMap,
   TokenPair,
   TokenStorage,
 } from "./types";

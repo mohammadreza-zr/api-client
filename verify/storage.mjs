@@ -464,7 +464,7 @@ try {
     // (Comparing before/after strings is unreliable: two JWTs minted in the
     // same second are byte-identical.)
     const rotated = await api.refresh();
-    check("refresh succeeded", rotated !== null);
+    check("refresh succeeded", rotated === true);
 
     const stored = JSON.parse(local.get("apiclient.tokens")).accessToken;
     check(

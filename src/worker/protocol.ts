@@ -1,4 +1,13 @@
-import type { AuthState, ClientOptions, HttpMethod, IRes, RequestConfig, TokenPair } from "../types";
+import type {
+  AuthState,
+  ClientOptions,
+  HttpMethod,
+  IRes,
+  RefreshBodyConfig,
+  RequestConfig,
+  TokenFieldMap,
+  TokenPair,
+} from "../types";
 
 /**
  * Worker wire protocol.
@@ -9,7 +18,13 @@ import type { AuthState, ClientOptions, HttpMethod, IRes, RequestConfig, TokenPa
  * behaviourally identical to main-thread mode.
  */
 
-/** Client options minus everything that is a function or otherwise unclonable. */
+/**
+ * Client options minus everything that is a function or otherwise unclonable.
+ *
+ * `extractTokens` / `buildRefreshBody` are forwarded in their declarative
+ * forms only — the function forms disable worker mode entirely, so a function
+ * never reaches this type.
+ */
 export type SerializableOptions = Omit<
   ClientOptions,
   | "storage"
@@ -28,7 +43,13 @@ export type SerializableOptions = Omit<
    * that can never be queried.
    */
   | "cancel"
-> & { storage?: Exclude<ClientOptions["storage"], object> };
+> & {
+  storage?: Exclude<ClientOptions["storage"], object>;
+  /** Only the declarative form can cross; a function extractor disables worker mode. */
+  extractTokens?: TokenFieldMap;
+  /** Only the declarative form can cross; a function builder disables worker mode. */
+  buildRefreshBody?: RefreshBodyConfig;
+};
 
 /**
  * Request config minus the function hooks.

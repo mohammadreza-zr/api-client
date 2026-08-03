@@ -2,8 +2,9 @@
 
 import { CoreClient } from "../internal/core-client";
 import { CancelError } from "../internal/cancel";
+import { stripTokenFields } from "../internal/extract";
 import type { HostMessage, WorkerMessage } from "./protocol";
-import type { LogEntry, RequestConfig, TokenPair, TokenStorage } from "../types";
+import type { LogEntry, RequestConfig, TokenFieldMap, TokenPair, TokenStorage } from "../types";
 
 /**
  * Worker-side host.
@@ -15,6 +16,8 @@ import type { LogEntry, RequestConfig, TokenPair, TokenStorage } from "../types"
 declare const self: DedicatedWorkerGlobalScope;
 
 let client: CoreClient | null = null;
+/** The declarative token map from `init`, so login results are stripped of custom key names too. */
+let extractMapping: TokenFieldMap | undefined;
 const aborters = new Map<number, AbortController>();
 
 const send = (msg: WorkerMessage): void => self.postMessage(msg);
@@ -73,6 +76,7 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
   try {
     switch (msg.kind) {
       case "init": {
+        extractMapping = msg.options.extractTokens;
         // Persistent kinds are proxied to the host; memory stays local.
         const kind = msg.options.storage ?? "memory";
         const storage = kind === "memory" ? undefined : new HostStorage();
@@ -128,6 +132,15 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
       case "login": {
         if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
         const result = await client.login(msg.body, msg.config as RequestConfig<unknown>);
+        /*
+         * The login response usually contains the tokens themselves, and the
+         * whole point of worker mode is that tokens never reach the main
+         * thread — not even as a side effect of `api.login()` resolving.
+         * Strip them before the result crosses the boundary; the extractor
+         * has already captured them into the worker's closure. The mapping is
+         * passed along so custom key names are stripped too.
+         */
+        result.data = stripTokenFields(result.data, extractMapping);
         send({ kind: "result", id: msg.id, result });
         break;
       }
