@@ -53,12 +53,14 @@
 
 ### Fixed
 
-- **A network blip during refresh no longer logs out every tab.** Only a
-  **server rejection** of the refresh (a non-2xx response) clears auth,
-  broadcasts logout and fires `onAuthFailure`. A network failure (offline,
-  DNS, timeout) now reports the refresh as failed while leaving the session
-  intact — the request that hit the 401 surfaces as 401, and the user stays
-  signed in when the network comes back.
+- **A network blip or server error during refresh no longer logs out every
+  tab.** Only an **authentication rejection** of the refresh (a 401/403
+  response) clears auth, broadcasts logout and fires `onAuthFailure` — that
+  is the server saying the user is not authenticated. A network failure
+  (offline, DNS, timeout) or a server error (5xx, rate-limit) now reports
+  the refresh as failed while leaving the session intact — the request that
+  hit the 401 surfaces as 401, and the user stays signed in when things
+  recover.
 
 - **Worker mode: the `login()` response no longer carries tokens to the main
   thread.** The response body that contains the tokens was posted back inside

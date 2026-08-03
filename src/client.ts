@@ -40,8 +40,9 @@ export interface ApiClient {
    *
    * Returns a boolean rather than the new token: the token never leaves the
    * worker, and whether the refresh *worked* is all a caller can act on.
-   * A `false` from a server rejection clears the session everywhere; a
-   * `false` from a network failure leaves it intact (a blip is not a logout).
+   * `false` only clears the session when the refresh endpoint rejected the
+   * authentication (401/403). Server errors (5xx) and network failures leave
+   * the session intact — a blip is not a logout.
    */
   refresh(): Promise<boolean>;
 

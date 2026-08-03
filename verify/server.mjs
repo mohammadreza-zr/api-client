@@ -84,6 +84,12 @@ export function start(port = 4599) {
       return send(res, 200, { result: { jwt: state.validAccess, renew: state.validRefresh, expires_in: 60 } });
     }
 
+    // A server-side failure of the refresh endpoint: 5xx, not an auth verdict.
+    if (path === "/auth/refresh-500") {
+      state.refreshCalls++;
+      return send(res, 500, { message: "Internal Server Error" });
+    }
+
     if (path === "/auth/logout") return send(res, 200, { message: "bye" });
 
     if (path === "/protected") {

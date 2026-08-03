@@ -221,12 +221,17 @@ export class CoreClient {
         return false;
       }
 
-      // The server answered. A non-2xx is the server's verdict on the
-      // session; trust it and tear auth down everywhere.
-      if (!response.ok) {
+      // The server answered. Only an authentication rejection — 401/403 from
+      // the refresh endpoint — is the server's verdict that the session is
+      // dead, so that is the only case that tears auth down everywhere.
+      // Anything else (a 5xx, a rate-limit 429, a 400 from a bad request) is
+      // a server-side problem that says nothing about the session, so leave
+      // it intact exactly like a network failure.
+      if (response.status === 401 || response.status === 403) {
         this.failAuth();
         return false;
       }
+      if (!response.ok) return false;
 
       const payload = await response.json().catch(() => undefined);
       const tokens = this.extractTokens(payload);

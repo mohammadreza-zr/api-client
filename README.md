@@ -241,7 +241,7 @@ Request C ─ 401 ─┘
 
 Concurrent failures are coalesced into a single refresh (no stampede, no polling loop). The client also refreshes **proactively** when the JWT is about to expire, saving a wasted round trip:
 
-Only a **server rejection** of the refresh ends the session — a 401/403 from the refresh endpoint clears auth in every tab and fires `onAuthFailure`. A **network failure** (offline, DNS, timeout) reports the refresh as failed without touching the session: a blip is not a logout, and the next request simply surfaces its 401 again.
+Only an **authentication rejection** of the refresh ends the session — a 401/403 from the refresh endpoint clears auth in every tab and fires `onAuthFailure`. A **server error** (5xx, rate-limit) or a **network failure** (offline, DNS, timeout) reports the refresh as failed without touching the session: a server-side problem is not proof the user logged out, and a blip is not a logout — the next request simply surfaces its 401 again.
 
 ```ts
 createClient({ refreshSkewMs: 30_000 }); // default; 0 disables

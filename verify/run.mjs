@@ -243,6 +243,33 @@ try {
     net.destroy();
   }
 
+  // A SERVER error (5xx) from the refresh endpoint must not end the session
+  // either — only an authentication rejection (401/403) does.
+  {
+    let authFailures = 0;
+    const srv = createClient({
+      baseUrl: BASE,
+      worker: false,
+      multiTab: false,
+      refreshSkewMs: 0,
+      throwError: false,
+      refreshUrl: "/auth/refresh-500",
+      onAuthFailure: () => authFailures++,
+    });
+    await srv.login({ password: "good" });
+    expireAccess();
+
+    const res = await srv.get("/protected");
+    check("5xx refresh: request surfaces 401", res.status === false && res.statusCode === 401);
+    const stateAfter = await srv.getAuthState();
+    check(
+      "5xx refresh: session survives (was: any non-2xx logged out)",
+      stateAfter.isAuthenticated === true,
+    );
+    check("5xx refresh: onAuthFailure NOT fired", authFailures === 0, `got ${authFailures}`);
+    srv.destroy();
+  }
+
   // proactive refresh
   console.log("\nproactive refresh");
   state.refreshCalls = 0;

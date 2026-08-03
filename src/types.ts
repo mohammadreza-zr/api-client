@@ -614,9 +614,10 @@ export interface ClientOptions {
   onAuthStateChanged?: (state: AuthState) => void;
 
   /**
-   * Called when auth is permanently lost — the server rejected a refresh,
-   * or a logout (local or in another tab) happened.
-   * Not called for network failures during a refresh: a blip is not a logout.
+   * Called when auth is permanently lost — the refresh endpoint rejected the
+   * authentication (401/403), or a logout (local or in another tab) happened.
+   * Not called for server errors (5xx) or network failures during a refresh:
+   * neither is proof the session died.
    */
   onAuthFailure?: () => void;
 

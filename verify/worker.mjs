@@ -363,6 +363,27 @@ try {
     mapped.destroy();
   }
 
+  // ── a 5xx from the refresh endpoint keeps the session in worker mode too ──
+  console.log("\nworker mode — 5xx refresh keeps the session");
+  {
+    const srv = createClient({
+      baseUrl: BASE,
+      multiTab: false,
+      refreshSkewMs: 0,
+      throwError: false,
+      refreshUrl: "/auth/refresh-500",
+    });
+    await srv.login({ password: "good" });
+    expireAccess();
+    const res = await srv.get("/protected");
+    check("worker 5xx refresh: request surfaces 401", res.status === false && res.statusCode === 401);
+    check(
+      "worker 5xx refresh: session survives",
+      (await srv.getAuthState()).isAuthenticated === true,
+    );
+    srv.destroy();
+  }
+
   // ── client-wide throwError must behave identically in worker mode ──
   const strict = createClient({
     baseUrl: BASE,

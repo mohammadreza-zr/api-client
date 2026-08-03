@@ -138,7 +138,7 @@ const ok = await api.refresh();
 // false → refresh failed
 ```
 
-The new token is never returned — in worker mode it deliberately never leaves the worker, and in every mode the boolean is all a caller can act on. A `false` from a **server rejection** (non-2xx from the refresh endpoint) clears the session everywhere and fires `onAuthFailure`. A `false` from a **network failure** (offline, DNS, timeout) leaves the session intact — a blip is not a logout, so the user is not thrown out of every tab because the train went through a tunnel.
+The new token is never returned — in worker mode it deliberately never leaves the worker, and in every mode the boolean is all a caller can act on. A `false` from an **authentication rejection** (401/403 from the refresh endpoint) clears the session everywhere and fires `onAuthFailure`. A `false` from a **server error** (5xx, rate-limit) or a **network failure** (offline, DNS, timeout) leaves the session intact — a server-side problem or a blip is not a logout, so the user is not thrown out of every tab because the train went through a tunnel.
 
 Rarely needed — the automatic paths cover normal use. It is handy for a "keep me signed in" heartbeat or right before a long operation:
 
