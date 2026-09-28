@@ -1,6 +1,6 @@
 {
   "name": "@mrzr/api-client",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "A TypeScript API client built on fetch, focused on browser auth: coalesced token refresh, Web Worker token isolation and cross-tab session sync. Zero dependencies.",
   "type": "module",
   "main": "./dist/index.cjs",

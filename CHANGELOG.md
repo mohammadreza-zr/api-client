@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.0.1 - 2026-09-28
+
+Documentation only; no code changes.
+
+- The README is now a short landing page: what the package does, when to
+  use it, a comparison, a quick start and links into the wiki.
+- The wiki matches the 3.0.0 code: the `ApiClient` type listing, CSRF in
+  worker mode, cookie-mode session rules, response redaction, the request
+  lifecycle, plugins as interceptors and socket credentials.
+- A plain package description on npm.
+
 ## 3.0.0 - 2026-09-28
 
 A security and correctness pass. Every fix below has a regression test in
