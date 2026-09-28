@@ -6,10 +6,6 @@
 
 Because the boring parts are always rewritten by hand. Token refresh with proper concurrency control, cross-tab logout, upload content-type handling, nested query params — every project reimplements them, usually with a race condition in the refresh queue. This packages them, with zero dependencies and no bundler configuration.
 
-### How big is it?
-
-~13 KB min+gzip for the full bundle, including the inlined worker. It's `sideEffects: false`, so importing only `buildQueryString` pulls in almost nothing (~0.4 KB).
-
 ### Does it work without a bundler?
 
 Yes:

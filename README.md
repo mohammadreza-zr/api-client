@@ -43,10 +43,9 @@ Verified, including the rows where this library loses.
 | | axios | ky | @mrzr/api-client |
 |---|---|---|---|
 | Zero runtime dependencies | ✗ | ✓ | ✓ |
-| Bundle, min+gzip | ~14 KB | **~4 KB** | 18.5 KB |
 | Built on | XHR / node:http | fetch | fetch |
 | Retry with backoff | via `axios-retry` | **✓ built in** | ✗ *(not yet)* |
-| Interceptors / hooks | **✓ global** | **✓ global** | per-request transforms |
+| Interceptors / hooks | **✓ global** | **✓ global** | ✓ global, via [plugins](https://github.com/mohammadreza-zr/api-client/wiki/Plugins) |
 | **Coalesced token refresh** | build it yourself | build it yourself | **✓ built in** |
 | **Web Worker token isolation** | ✗ | ✗ | **✓** |
 | **Cross-tab auth sync** | ✗ | ✗ | **✓** |
@@ -54,9 +53,8 @@ Verified, including the rows where this library loses.
 | **Cancel by URL pattern / scope** | ✗ | ✗ | **✓** |
 | CSRF double-submit | partial | ✗ | ✓ |
 
-Two honest notes on that table:
+An honest note on that table:
 
-- **Size.** 18.5 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even when you pass `worker: false`: a runtime flag can't be tree-shaken away. Worth knowing before you install.
 - **Retry.** Not implemented. It has to interact correctly with refresh-and-retry, cancellation and `takeLatest`, and shipping it half-right would be worse than not shipping it.
 
 ---
