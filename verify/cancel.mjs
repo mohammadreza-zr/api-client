@@ -201,7 +201,7 @@ try {
   }
 
   // ── documented pattern claims ───────────────────────────
-  // Every row of the pattern table in README.md and wiki/Cancellation.md.
+  // Every row of the pattern table in wiki/Cancellation.md.
   console.log("\ndocumented pattern table");
   {
     const api = createClient({ baseUrl: BASE, worker: false, throwError: false, cancel: true });
