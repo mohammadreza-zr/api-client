@@ -11,6 +11,7 @@ import type {
 import { linkSignals } from "../internal/cancel";
 import { CoreClient } from "../internal/core-client";
 import { resolveBaseUrl } from "../internal/env";
+import { callHook } from "../internal/hooks";
 import { applyTransforms, errorMessage, failedResult, markCanceled } from "../internal/result";
 import { storageFor } from "../internal/storage";
 import { RequestTracker } from "../internal/tracker";
@@ -51,7 +52,7 @@ export class WorkerHost {
   }
 
   private emitAuth(state: AuthState): void {
-    this.options.onAuthStateChanged?.(state);
+    callHook(this.options.onAuthStateChanged, state);
     for (const listener of this.listeners) {
       try {
         listener(state);
@@ -117,7 +118,7 @@ export class WorkerHost {
     }
 
     // A cancellation is deliberate, so it must not raise the error toast.
-    if (!result.status && !result.canceled && !config?.hideErrorMessage) this.options.onError?.(result);
+    if (!result.status && !result.canceled && !config?.hideErrorMessage) callHook(this.options.onError, result);
     return result;
   }
 
@@ -161,7 +162,9 @@ export class WorkerHost {
         const result = await this.channel
           .call<IRes<R>>((id) => ({ kind: "login", id, body, config: serializable }))
           .catch((error: unknown) => toFailure<R>(error));
-        if (!result.status && !config?.hideErrorMessage) this.options.onError?.(result);
+        // Transforms are functions: they couldn't cross the boundary, so they run here.
+        applyTransforms(result as IRes<unknown>, (config ?? {}) as RequestConfig<unknown>);
+        if (!result.status && !config?.hideErrorMessage) callHook(this.options.onError, result);
         return result;
       },
     );
@@ -170,10 +173,13 @@ export class WorkerHost {
   logout<R = unknown>(config?: RequestConfig<R>): Promise<IRes<R>> {
     return this.route(
       (client) => client.logout(config),
-      () =>
-        this.channel
+      async () => {
+        const result = await this.channel
           .call<IRes<R>>((id) => ({ kind: "logout", id, config: splitConfig(config).serializable }))
-          .catch((error: unknown) => toFailure<R>(error)),
+          .catch((error: unknown) => toFailure<R>(error));
+        applyTransforms(result as IRes<unknown>, (config ?? {}) as RequestConfig<unknown>);
+        return result;
+      },
     );
   }
 

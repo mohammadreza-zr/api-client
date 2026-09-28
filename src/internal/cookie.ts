@@ -13,12 +13,16 @@ function withinProviderTimeout<T>(pending: Promise<T>): Promise<T | undefined> {
   return Promise.race([pending, expired]).finally(() => clearTimeout(timer));
 }
 
-/** Reads a single cookie value by name; `undefined` where there is no `document`. */
-export function readCookie(name: string): string | undefined {
+/**
+ * Reads a single cookie value by name; `undefined` where there is no `document`.
+ * `decode: false` returns the stored text as-is, for values that must be joined before decoding.
+ */
+export function readCookie(name: string, decode = true): string | undefined {
   if (typeof document === "undefined") return undefined;
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]*)`));
   if (!match) return undefined;
+  if (!decode) return match[1];
   try {
     return decodeURIComponent(match[1]);
   } catch {

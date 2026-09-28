@@ -2,6 +2,7 @@ import type { AuthState, ClientOptions, TokenPair, TokenStorage } from "../types
 import type { HostMessage, WorkerMessage } from "./protocol";
 import { reasonOf } from "../internal/cancel";
 import { createCsrfReader, type CsrfReader } from "../internal/cookie";
+import { callHook } from "../internal/hooks";
 import { resolveStorage } from "../internal/storage";
 import { toSerializableOptions } from "./host-options";
 import { WORKER_SOURCE } from "./worker-source";
@@ -177,10 +178,10 @@ export class WorkerChannel {
         this.events.authChanged(msg.state);
         break;
       case "authFailure":
-        this.options.onAuthFailure?.();
+        callHook(this.options.onAuthFailure);
         break;
       case "log":
-        if (this.options.onLog) this.options.onLog(msg.entry as never);
+        if (this.options.onLog) callHook(this.options.onLog, msg.entry as never);
         else console.info("[api-client]", msg.entry);
         break;
       case "storage":

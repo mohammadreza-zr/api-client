@@ -11,7 +11,8 @@ import {
 } from "./body";
 import { linkSignals } from "./cancel";
 import { assertFetchable } from "./env";
-import { isTrustedUrl } from "./origin";
+import { callHook } from "./hooks";
+import { isTrustedUrl, resolveRequestUrl } from "./origin";
 import { applyTransforms, emptyResult, errorMessage, markCanceled } from "./result";
 import { buildUrl } from "./url";
 
@@ -241,13 +242,15 @@ export async function executeRequest<R>(request: EngineRequest, ctx: EngineConte
   let finalUrl = "";
 
   try {
-    finalUrl = buildUrl({
-      url: request.url,
-      baseUrl: config.baseUrl ?? ctx.baseUrl,
-      addToUrl: config.addToUrl,
-      addTemplateToUrl: config.addTemplateToUrl,
-      params: config.params as Record<string, unknown> | undefined,
-    });
+    finalUrl = resolveRequestUrl(
+      buildUrl({
+        url: request.url,
+        baseUrl: config.baseUrl ?? ctx.baseUrl,
+        addToUrl: config.addToUrl,
+        addTemplateToUrl: config.addTemplateToUrl,
+        params: config.params as Record<string, unknown> | undefined,
+      }),
+    );
     assertFetchable(finalUrl);
 
     const body = config.beforeFunc ? config.beforeFunc(request.body) : request.body;
@@ -325,7 +328,7 @@ function logResult(
     timestamp: new Date().toISOString(),
     error: result.error,
   };
-  if (ctx.onLog) ctx.onLog(entry);
+  if (ctx.onLog) callHook(ctx.onLog, entry);
   else console.info("[api-client]", entry);
 }
 

@@ -495,9 +495,10 @@ export interface ClientOptions {
 
   /**
    * Extra origins allowed to receive the access token and CSRF header, e.g.
-   * `["https://files.example.com"]`. The `baseUrl` origin is always allowed;
-   * every other absolute URL is sent without credentials headers, so a
-   * request to a third party (or one injected by XSS) can't read the token.
+   * `["https://files.example.com"]`. The `baseUrl` origin and the page's own
+   * origin are always allowed; every other URL is sent without credentials
+   * headers, so a request to a third party (or one injected by XSS) can't
+   * read the token.
    */
   authOrigins?: string[];
 

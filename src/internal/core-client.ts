@@ -12,11 +12,13 @@ import type {
 } from "../types";
 import { AuthStore } from "./auth-store";
 import { TabSync } from "./broadcast";
-import { previewUrl, toPath } from "./cancel";
+import { previewUrl } from "./cancel";
 import { createCsrfReader, type CsrfReader } from "./cookie";
 import { executeRequest, type EngineContext } from "./engine";
+import { callHook } from "./hooks";
 import { extractUser, normalizeExtractor, normalizeRefreshBody } from "./extract";
-import { trustedOrigins } from "./origin";
+import { resolveRequestUrl, trustedOrigins } from "./origin";
+import { applyTransforms } from "./result";
 import { runRefresh } from "./refresh";
 import { sharesSession } from "./storage";
 import { RequestTracker } from "./tracker";
@@ -89,7 +91,7 @@ export class CoreClient {
     const storageKey = options.storageKey ?? "apiclient";
     // Cookie mode keeps tokens server-side; nothing to persist locally.
     this.auth = new AuthStore(authMode === "cookie" ? undefined : storage);
-    this.auth.subscribe((state) => this.hooks.onAuthStateChanged?.(state));
+    this.auth.subscribe((state) => callHook(this.hooks.onAuthStateChanged, state));
 
     this.tabs = new TabSync(`${storageKey}.auth`, options.multiTab !== false);
     this.tabs.on((msg) => this.onTabMessage(msg));
@@ -104,7 +106,7 @@ export class CoreClient {
 
     if (msg.type === "logout") {
       this.auth.clear();
-      this.hooks.onAuthFailure?.();
+      callHook(this.hooks.onAuthFailure);
       return;
     }
 
@@ -182,11 +184,13 @@ export class CoreClient {
   }
 
   private failAuth(): void {
-    // A tab that never had a session, or doesn't share it, must not log the others out.
-    const broadcast = this.sharedSession && this.auth.hasCredentials;
+    // Only a shared session is ended everywhere. In header mode a tab holding no
+    // credentials proves nothing about the others; in cookie mode every tab sends
+    // the same cookie, so the server's rejection is the verdict for all of them.
+    const broadcast = this.sharedSession && (this.opts.authMode === "cookie" || this.auth.hasCredentials);
     this.auth.clear();
     if (broadcast) this.tabs.post({ type: "logout", tabId: this.tabs.tabId });
-    this.hooks.onAuthFailure?.();
+    callHook(this.hooks.onAuthFailure);
   }
 
   // ── requests ───────────────────────────────────────────
@@ -245,7 +249,7 @@ export class CoreClient {
      * modal, which is exactly what this feature exists to avoid.
      */
     if (!result.status && !result.canceled && !config?.hideErrorMessage) {
-      this.hooks.onError?.(result);
+      callHook(this.hooks.onError, result);
     }
 
     return result;
@@ -287,11 +291,14 @@ export class CoreClient {
   // ── auth actions ───────────────────────────────────────
 
   async login<R = unknown>(body: unknown, config?: RequestConfig<R>): Promise<IRes<R>> {
+    // The caller's transforms shape what login returns; they must not run
+    // before the tokens are read, or a transform could hide them.
+    const { afterFunc, beforeSelectOptions, ...handshake } = config ?? {};
     const result = await this.send<R>("POST", this.opts.loginUrl, body, {
       // A caller can still opt in explicitly; the default is never to make an
       // auth handshake collateral damage of a route change.
       cancelable: false,
-      ...config,
+      ...handshake,
       skipAuth: true,
       refreshTokenCheck: false,
       fullData: true,
@@ -322,6 +329,7 @@ export class CoreClient {
           result.data = envelope.data as R;
         }
       }
+      applyTransforms(result as IRes<unknown>, { afterFunc, beforeSelectOptions } as RequestConfig<unknown>);
     }
 
     return result;
@@ -426,10 +434,12 @@ export class CoreClient {
     return new Set([this.auth.accessToken, this.auth.refreshToken].filter((t): t is string => Boolean(t)));
   }
 
-  /** For the worker boundary: whether `url` is the login or refresh endpoint, which mint tokens. */
+  /** For the worker boundary: whether `url` is this client's login or refresh endpoint, which mint tokens. */
   isAuthEndpoint(url: string, config?: RequestConfig<unknown>): boolean {
-    const path = toPath(previewUrl(url, this.opts.baseUrl, config));
-    return [this.opts.loginUrl, this.opts.refreshUrl].some((u) => toPath(joinUrl(this.opts.baseUrl, u)) === path);
+    // Origin and path both count: another host's `/auth/refresh` isn't ours.
+    const endpoint = (u: string) => resolveRequestUrl(u).split(/[?#]/)[0].replace(/\/+$/, "");
+    const target = endpoint(previewUrl(url, this.opts.baseUrl, config));
+    return [this.opts.loginUrl, this.opts.refreshUrl].some((u) => endpoint(joinUrl(this.opts.baseUrl, u)) === target);
   }
 
   async getAuthState(): Promise<AuthState> {

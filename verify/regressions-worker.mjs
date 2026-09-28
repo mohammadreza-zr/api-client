@@ -51,6 +51,19 @@ try {
   const login = await roles.login({});
   check("login strips tokens from the result", login.data?.access === undefined && login.data?.refresh === undefined);
   check("login keeps non-token fields named like tokens", Array.isArray(login.data?.user?.access));
+  const shaped = await client({ loginUrl: "/login-with-roles" }).login({}, { afterFunc: (d) => ({ shaped: d }) });
+  check("worker login applies afterFunc", shaped.data?.shaped !== undefined, JSON.stringify(shaped.data));
+  const loggedOut = await roles.logout({ afterFunc: () => "shaped-logout" });
+  check("worker logout applies afterFunc", loggedOut.data === "shaped-logout", JSON.stringify(loggedOut.data));
+
+  const partner = await api.post("/auth/refresh", {}, { baseUrl: FOREIGN });
+  check("another host's same-named path is not treated as our refresh endpoint", partner.data?.refresh === "refresh-next", JSON.stringify(partner.data));
+
+  let noisyResult;
+  const noisy = client({ onLog: () => { throw new Error("logger down"); } });
+  noisyResult = await within(noisy.get("/logged", { log: true }), 3000);
+  check("a throwing onLog doesn't break a worker request", noisyResult?.status === true);
+  noisy.destroy();
 
   console.log("\ntokens never cross to the page");
   // The rejected refresh above ended the session; these checks need a live one.

@@ -98,7 +98,7 @@ export function runRefresh(ctx: RefreshContext): Promise<boolean> {
   const startedWith = ctx.auth.refreshToken;
   const queuedAt = Date.now();
 
-  const turn = ctx.tabs.exclusive(async () => {
+  const task = async (): Promise<boolean> => {
     if (ctx.auth.generation !== generation) return false;
     if (await adoptSiblingRefresh(ctx, startedWith, queuedAt)) return true;
 
@@ -115,8 +115,12 @@ export function runRefresh(ctx: RefreshContext): Promise<boolean> {
     await ctx.auth.flush();
     ctx.tabs.post({ type: "refreshed", tabId: ctx.tabs.tabId, expiresAt: ctx.auth.expiresAt });
     return true;
-    // The tab ahead may spend a full `timeout` on its own refresh; don't give up just before it lands.
-  }, ctx.timeout * 2);
+  };
+
+  // Tabs take turns only when they share one session; independent per-tab
+  // sessions (memory, sessionStorage) have nothing to wait for. The tab ahead
+  // may spend a full `timeout` on its own refresh, so wait up to two.
+  const turn = ctx.sharedSession ? ctx.tabs.exclusive(task, ctx.timeout * 2) : task();
 
   // Never got the lock in time: a failed refresh, which keeps the session.
   return turn.catch((error: unknown) => {

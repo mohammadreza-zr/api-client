@@ -28,6 +28,10 @@ function cookieJar() {
   };
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+/** The resolved value, or the rejection itself — so a rejection shows up as a failed check. */
+const rejectionOrValue = (promise) => promise.then((value) => value, (error) => error);
+
 const servers = [await start(4620), await start(4621)];
 
 try {
@@ -135,6 +139,29 @@ try {
   check("DELETE without body sends no Content-Type", seenAt("/ct-delete")[0]?.ct === null);
   check("JSON body still sends application/json", seenAt("/ct-post")[0]?.ct === "application/json");
 
+  console.log("\nURLs are classified exactly as they are fetched");
+  // Browsers resolve these against the page, treating "\\" like "/": each names the foreign host.
+  globalThis.location = { href: `${BASE}/app/page`, origin: BASE, protocol: "http:" };
+  const pageApi = client({ getCsrfToken: () => "csrf-page" });
+  await pageApi.setTokens({ accessToken: jwt(600), refreshToken: "r" });
+  for (const [label, base] of [["\\\\host", "\\\\127.0.0.1:4621"], ["/\\host", "/\\127.0.0.1:4621"], ["//host", "//127.0.0.1:4621"]]) {
+    const path = `/bs-${label.length}-${base.length}`;
+    await pageApi.post(path, {}, { baseUrl: base });
+    const seen = seenAt(path)[0];
+    check(`${label}: the foreign host gets no token or CSRF`, seen !== undefined && seen.auth === null && seen.csrf === null, JSON.stringify(seen));
+  }
+  delete globalThis.location;
+
+  console.log("\nlogin transforms and logging");
+  state.loginBody = { access: jwt(600), refresh: "r", user: { name: "Ada" } };
+  const transformed = client();
+  const loggedIn = await transformed.login({}, { afterFunc: () => "transformed" });
+  check("a login afterFunc shapes the result", loggedIn.data === "transformed", JSON.stringify(loggedIn.data));
+  check("…without stopping the tokens from being captured", (await transformed.getAuthState()).isAuthenticated === true);
+  const noisy = client({ onLog: () => { throw new Error("logger down"); } });
+  const logged = await rejectionOrValue(noisy.get("/logged", { log: true }));
+  check("a throwing onLog cannot turn a finished request into a rejection", logged?.status === true, String(logged));
+
   console.log("\nhardening of the new features");
   const stuck = client({ getCsrfToken: () => new Promise(() => {}) });
   const unblocked = await within(stuck.post("/csrf-stuck", {}), 8000);
@@ -158,6 +185,16 @@ try {
   oversized.set({ accessToken: "a".repeat(30_000) });
   check("a pair too large for cookies writes nothing partial", oversized.get() === null && !document.cookie.includes("huge.tokens"));
   check("a planted chunk count cannot freeze CookieStorage", planted === null && Date.now() - t1 < 100, `${Date.now() - t1}ms`);
+  // 1,000 surrogate pairs encode to 12 KB: the old ASCII assumption put 7 KB in one cookie.
+  const unicode = { accessToken: "🔑".repeat(1000), refreshToken: "r" };
+  const unicodeStorage = new CookieStorage("unicode.tokens");
+  unicodeStorage.set(unicode);
+  const cookieSizes = document.cookie.split("; ").map((pair) => pair.length);
+  check("non-ASCII tokens round-trip", JSON.stringify(unicodeStorage.get()) === JSON.stringify(unicode));
+  check("…with every cookie under the browser's 4 KB limit", Math.max(...cookieSizes) < 4096, `largest ${Math.max(...cookieSizes)}`);
+  unicodeStorage.set({ accessToken: "b".repeat(9000), refreshToken: "r" });
+  unicodeStorage.clear();
+  check("rewrites and clear() leave no stale chunks behind", !document.cookie.includes("unicode.tokens"), document.cookie.slice(0, 80));
   delete globalThis.document;
 
   console.log("\ncross-tab");
@@ -193,6 +230,33 @@ try {
     console.log("  - skipped: this runtime has no Web Locks API (navigator.locks)");
   }
   [tabA, tabB].forEach((tab) => tab.destroy());
+
+  state.loginBody = { user: { name: "Ada" } };
+  const cookieA = client({ multiTab: true, authMode: "cookie", storageKey: "tabs-cookie" });
+  await cookieA.login({});
+  await sleep(50);
+  // Opened after the login broadcast, so this tab never saw the session locally.
+  const cookieB = client({ multiTab: true, authMode: "cookie", storageKey: "tabs-cookie" });
+  state.refreshMode = "reject";
+  await cookieB.get("/private");
+  await sleep(50);
+  check("cookie mode: a rejected refresh in any tab ends the shared session everywhere", (await cookieA.getAuthState()).isAuthenticated === false);
+  state.refreshMode = "ok";
+  [cookieA, cookieB].forEach((tab) => tab.destroy());
+
+  if (typeof globalThis.navigator?.locks?.request === "function") {
+    state.refreshMode = "slow";
+    const own1 = client({ multiTab: true, storageKey: "tabs-independent" });
+    const own2 = client({ multiTab: true, storageKey: "tabs-independent" });
+    await own1.setTokens({ accessToken: jwt(600), refreshToken: "r" });
+    await own2.setTokens({ accessToken: jwt(600), refreshToken: "r" });
+    const t0 = Date.now();
+    await Promise.all([own1.refresh(), own2.refresh()]);
+    // Each refresh takes ~300 ms; queued behind one another they would take ≥ 600 ms.
+    check("independent per-tab sessions refresh in parallel", Date.now() - t0 < 550, `${Date.now() - t0}ms`);
+    state.refreshMode = "ok";
+    [own1, own2].forEach((tab) => tab.destroy());
+  }
 } finally {
   servers.forEach((server) => server.close());
   finish();
