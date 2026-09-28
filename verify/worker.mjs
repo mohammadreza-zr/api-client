@@ -5,9 +5,8 @@
  * and execute the worker source inside a vm context whose `self` is wired to a
  * message channel — the same contract a browser provides.
  */
-import vm from "node:vm";
-import { readFileSync } from "node:fs";
 import { start, state, expireAccess } from "./server.mjs";
+import { FakeWorker, madeWorkers } from "./worker-harness.mjs";
 
 const BASE = "http://localhost:4600";
 let pass = 0,
@@ -21,122 +20,6 @@ const check = (name, cond, detail = "") => {
     console.log(`  ✗ ${name} ${detail}`);
   }
 };
-
-// Extract the inlined worker source exactly as shipped.
-const raw = readFileSync("src/worker/worker-source.ts", "utf8");
-const WORKER_SOURCE = JSON.parse(raw.match(/WORKER_SOURCE = ("(?:[^"\\]|\\.)*")/s)[1]);
-
-/** Every fake worker created, so a test can crash the one a client owns. */
-const madeWorkers = [];
-
-/** Minimal but faithful DedicatedWorker emulation. */
-class FakeWorker {
-  constructor() {
-    this.onmessage = null;
-    this.onerror = null;
-    this._listeners = new Set();
-    this._closed = false;
-
-    const host = this;
-    const scope = {
-      postMessage(data) {
-        if (host._closed) return;
-        const event = { data: structuredClone(data) };
-        queueMicrotask(() => {
-          host.onmessage?.(event);
-          for (const l of host._listeners) l(event);
-        });
-      },
-      close() {
-        host._closed = true;
-      },
-      onmessage: null,
-      addEventListener() {},
-      removeEventListener() {},
-      fetch: globalThis.fetch,
-      Headers: globalThis.Headers,
-      Request: globalThis.Request,
-      Response: globalThis.Response,
-      AbortController: globalThis.AbortController,
-      AbortSignal: globalThis.AbortSignal,
-      FormData: globalThis.FormData,
-      Blob: globalThis.Blob,
-      URLSearchParams: globalThis.URLSearchParams,
-      URL: globalThis.URL,
-      TextDecoder: globalThis.TextDecoder,
-      TextEncoder: globalThis.TextEncoder,
-      setTimeout,
-      clearTimeout,
-      queueMicrotask,
-      console,
-      structuredClone,
-      DOMException: globalThis.DOMException,
-      Date,
-      Math,
-      JSON,
-      Promise,
-      Error,
-      Object,
-      Array,
-      String,
-      Number,
-      Boolean,
-      Symbol,
-      Map,
-      Set,
-      RegExp,
-      Uint8Array,
-      atob: globalThis.atob,
-      btoa: globalThis.btoa,
-      // A real DedicatedWorkerGlobalScope exposes these; without them the
-      // library cannot tell a worker apart from an SSR/Node scope and
-      // silently disables cross-tab sync.
-      importScripts() {},
-      WorkerGlobalScope: function WorkerGlobalScope() {},
-      BroadcastChannel: globalThis.BroadcastChannel,
-    };
-    scope.self = scope;
-    scope.globalThis = scope;
-
-    this._ctx = vm.createContext(scope);
-    vm.runInContext(WORKER_SOURCE, this._ctx, { filename: "worker.js" });
-    this._scope = scope;
-    madeWorkers.push(this);
-  }
-
-  postMessage(data) {
-    if (this._closed) return;
-    const event = { data: structuredClone(data) };
-    queueMicrotask(() => {
-      try {
-        this._scope.onmessage?.(event);
-      } catch (e) {
-        this.onerror?.({ message: e.message });
-      }
-    });
-  }
-
-  addEventListener(_type, fn) {
-    this._listeners.add(fn);
-  }
-  removeEventListener(_type, fn) {
-    this._listeners.delete(fn);
-  }
-  terminate() {
-    this._closed = true;
-  }
-  /** Fires the worker's `onerror` — what a real browser does on a crash. */
-  crashNow(message = "simulated worker crash") {
-    this.onerror?.({ message });
-  }
-}
-
-globalThis.Worker = FakeWorker;
-globalThis.Blob = globalThis.Blob ?? class {};
-globalThis.URL.createObjectURL = () => "blob:worker";
-globalThis.URL.revokeObjectURL = () => {};
-// Make the library believe it is in a browser so worker mode engages.
-globalThis.window = globalThis;
 
 const { server } = await start(4600);
 const { createClient } = await import("../dist/index.js");
@@ -258,14 +141,15 @@ try {
     const inFlightRes = await inFlight;
     check(
       "crash: in-flight request settles (was: hung forever)",
-      inFlightRes.status === false && inFlightRes.statusCode === 500,
+      // 0, not 500: the server never answered, and a fake 500 makes data libraries retry a server error.
+      inFlightRes.status === false && inFlightRes.statusCode === 0,
       JSON.stringify(inFlightRes.message),
     );
 
     const after = await crashApi.get("/echo");
     check(
       "crash: subsequent requests fail fast with an actionable message",
-      after.status === false && after.statusCode === 500 && /crash/i.test(after.message),
+      after.status === false && after.statusCode === 0 && /crash/i.test(after.message),
       JSON.stringify(after.message),
     );
     check("crash: fail-fast is immediate", Date.now() - t0 < 1000);

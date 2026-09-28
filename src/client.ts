@@ -10,7 +10,8 @@ import type {
 } from "./types";
 import { ApiError } from "./types";
 import { CoreClient } from "./internal/core-client";
-import { hasWorker, isServer, isWorkerScope } from "./internal/env";
+import { storageFor } from "./internal/storage";
+import { hasWorker, isServer, isWorkerScope, resolveBaseUrl } from "./internal/env";
 import { WorkerHost } from "./worker/worker-host";
 import { WORKER_SOURCE } from "./worker/worker-source";
 
@@ -150,6 +151,8 @@ type Implementation = Pick<
 > & {
   /** Resolves `throwOnCancel` for a config, using the client-wide default. */
   shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean;
+  /** Whether requests run in a worker right now; absent means never. */
+  readonly usesWorker?: boolean;
 };
 
 /**
@@ -189,17 +192,17 @@ export function createClient(options: ClientOptions = {}): ApiClient {
 
   if (canUseWorker) {
     try {
-      return wrap(new WorkerHost(options), true, options);
+      return wrap(new WorkerHost(options), options);
     } catch {
       // Blob workers are blocked by some CSPs — fall back silently.
     }
   }
 
-  return wrap(new CoreClient(options), false, options);
+  return wrap(new CoreClient({ ...options, baseUrl: resolveBaseUrl(options.baseUrl) }, storageFor(options)), options);
 }
 
 /** Applies `throwError` uniformly on top of either implementation. */
-function wrap(impl: Implementation, isWorker: boolean, options: ClientOptions): ApiClient {
+function wrap(impl: Implementation, options: ClientOptions): ApiClient {
   // Throwing by default is what react-query, SWR and Vue Query expect.
   const throwByDefault = options.throwError !== false;
 
@@ -243,7 +246,10 @@ function wrap(impl: Implementation, isWorker: boolean, options: ClientOptions): 
     cancel: (selector, reason) => impl.cancel(selector, reason),
     pending: (selector) => impl.pending(selector),
     cancelScope: (name) => createScope(client, name),
-    isWorker,
+    // A getter: a worker blocked at boot falls back to the page after creation.
+    get isWorker() {
+      return impl.usesWorker ?? false;
+    },
     destroy: () => impl.destroy(),
   } as ApiClient;
 

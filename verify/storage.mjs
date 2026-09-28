@@ -14,9 +14,8 @@
  * This drives the REAL inlined worker bundle through the REAL host protocol,
  * in a vm scope that — like a browser worker — has no Window storage APIs.
  */
-import vm from "node:vm";
-import { readFileSync } from "node:fs";
 import { start, state as serverState } from "./server.mjs";
+import { FakeWorker } from "./worker-harness.mjs";
 
 const BASE = "http://localhost:4603";
 let pass = 0,
@@ -31,111 +30,6 @@ const check = (name, cond, detail = "") => {
     console.log(`  ✗ ${name} ${detail}`);
   }
 };
-
-const raw = readFileSync("src/worker/worker-source.ts", "utf8");
-const WORKER_SOURCE = JSON.parse(raw.match(/WORKER_SOURCE = ("(?:[^"\\]|\\.)*")/s)[1]);
-
-/**
- * Faithful DedicatedWorker emulation.
- *
- * Deliberately exposes NO localStorage, sessionStorage or document — that
- * absence is the whole point of this suite.
- */
-class FakeWorker {
-  constructor() {
-    this.onmessage = null;
-    this.onerror = null;
-    this._listeners = new Set();
-    this._closed = false;
-
-    const host = this;
-    const scope = {
-      postMessage(data) {
-        if (host._closed) return;
-        const event = { data: structuredClone(data) };
-        queueMicrotask(() => {
-          host.onmessage?.(event);
-          for (const l of host._listeners) l(event);
-        });
-      },
-      close() {
-        host._closed = true;
-      },
-      onmessage: null,
-      addEventListener() {},
-      removeEventListener() {},
-      fetch: globalThis.fetch,
-      Headers: globalThis.Headers,
-      Request: globalThis.Request,
-      Response: globalThis.Response,
-      AbortController: globalThis.AbortController,
-      AbortSignal: globalThis.AbortSignal,
-      FormData: globalThis.FormData,
-      Blob: globalThis.Blob,
-      URLSearchParams: globalThis.URLSearchParams,
-      URL: globalThis.URL,
-      TextDecoder: globalThis.TextDecoder,
-      TextEncoder: globalThis.TextEncoder,
-      setTimeout,
-      clearTimeout,
-      queueMicrotask,
-      console,
-      structuredClone,
-      DOMException: globalThis.DOMException,
-      Date,
-      Math,
-      JSON,
-      Promise,
-      Error,
-      Object,
-      Array,
-      String,
-      Number,
-      Boolean,
-      Symbol,
-      Map,
-      Set,
-      RegExp,
-      Uint8Array,
-      atob: globalThis.atob,
-      btoa: globalThis.btoa,
-      // A real DedicatedWorkerGlobalScope exposes these; without them the
-      // library cannot tell a worker apart from an SSR/Node scope and
-      // silently disables cross-tab sync.
-      importScripts() {},
-      WorkerGlobalScope: function WorkerGlobalScope() {},
-      BroadcastChannel: globalThis.BroadcastChannel,
-    };
-    scope.self = scope;
-    scope.globalThis = scope;
-
-    this._ctx = vm.createContext(scope);
-    vm.runInContext(WORKER_SOURCE, this._ctx, { filename: "worker.js" });
-    this._scope = scope;
-  }
-
-  postMessage(data) {
-    if (this._closed) return;
-    const event = { data: structuredClone(data) };
-    queueMicrotask(() => {
-      try {
-        this._scope.onmessage?.(event);
-      } catch (e) {
-        this.onerror?.({ message: e.message });
-      }
-    });
-  }
-
-  addEventListener(_type, fn) {
-    this._listeners.add(fn);
-  }
-  removeEventListener(_type, fn) {
-    this._listeners.delete(fn);
-  }
-  terminate() {
-    this._closed = true;
-  }
-}
 
 // ── main-thread (Window) environment ─────────────────────
 
@@ -165,12 +59,6 @@ Object.defineProperty(globalThis, "document", {
     },
   }),
 });
-
-globalThis.Worker = FakeWorker;
-globalThis.Blob = globalThis.Blob ?? class {};
-globalThis.URL.createObjectURL = () => "blob:worker";
-globalThis.URL.revokeObjectURL = () => {};
-globalThis.window = globalThis;
 
 const reset = () => {
   local.clear();

@@ -49,6 +49,8 @@ export type SerializableOptions = Omit<
   extractTokens?: TokenFieldMap;
   /** Only the declarative form can cross; a function builder disables worker mode. */
   buildRefreshBody?: RefreshBodyConfig;
+  /** CSRF is configured: the worker asks the host, where cookies and the provider live. */
+  csrf?: boolean;
 };
 
 /**
@@ -84,7 +86,9 @@ export type HostMessage =
   | { kind: "restoreSession"; id: number; url?: string }
   | { kind: "destroy" }
   /** Reply to a worker-initiated storage read/write. */
-  | { kind: "storageResult"; id: number; tokens: TokenPair | null };
+  | { kind: "storageResult"; id: number; tokens: TokenPair | null }
+  /** Reply to a worker-initiated CSRF token read. */
+  | { kind: "csrfResult"; id: number; token?: string };
 
 export type WorkerMessage =
   | { kind: "ready" }
@@ -104,4 +108,6 @@ export type WorkerMessage =
    * itself. It asks the host to do it instead. Only reaches the host for
    * explicitly persistent adapters — `"memory"` never leaves the worker.
    */
-  | { kind: "storage"; id: number; op: "get" | "set" | "clear"; tokens?: TokenPair };
+  | { kind: "storage"; id: number; op: "get" | "set" | "clear"; tokens?: TokenPair }
+  /** CSRF token read, proxied to the main thread: `document.cookie` does not exist in a worker. */
+  | { kind: "csrf"; id: number };

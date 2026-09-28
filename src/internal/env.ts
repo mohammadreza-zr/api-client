@@ -65,13 +65,19 @@ function staticEnv(): EnvBag {
     }
   };
 
-  // Next.js (and anything webpack/turbopack-based).
+  // Next.js, Create React App, Expo (and anything webpack/turbopack/Metro-based).
   put("NEXT_PUBLIC_API_URL", () => process.env.NEXT_PUBLIC_API_URL);
+  put("NEXT_PUBLIC_API_BASE_URL", () => process.env.NEXT_PUBLIC_API_BASE_URL);
   put("NEXT_PUBLIC_BASE_URL", () => process.env.NEXT_PUBLIC_BASE_URL);
+  put("REACT_APP_API_URL", () => process.env.REACT_APP_API_URL);
+  put("EXPO_PUBLIC_API_URL", () => process.env.EXPO_PUBLIC_API_URL);
+  put("PUBLIC_API_BASE_URL", () => process.env.PUBLIC_API_BASE_URL);
+  put("API_BASE_URL", () => process.env.API_BASE_URL);
   put("NUXT_PUBLIC_API_URL", () => process.env.NUXT_PUBLIC_API_URL);
   put("PUBLIC_API_URL", () => process.env.PUBLIC_API_URL);
   put("API_URL", () => process.env.API_URL);
   put("VITE_API_URL", () => process.env.VITE_API_URL);
+  put("VITE_API_BASE_URL", () => process.env.VITE_API_BASE_URL);
   put("VITE_BASE_URL", () => process.env.VITE_BASE_URL);
 
   /*
@@ -83,8 +89,10 @@ function staticEnv(): EnvBag {
    * `import.meta.env` just throws a TypeError, which `put` swallows.
    */
   put("VITE_API_URL", () => (import.meta as any).env.VITE_API_URL);
+  put("VITE_API_BASE_URL", () => (import.meta as any).env.VITE_API_BASE_URL);
   put("VITE_BASE_URL", () => (import.meta as any).env.VITE_BASE_URL);
   put("PUBLIC_API_URL", () => (import.meta as any).env.PUBLIC_API_URL);
+  put("PUBLIC_API_BASE_URL", () => (import.meta as any).env.PUBLIC_API_BASE_URL);
   put("NUXT_PUBLIC_API_URL", () => (import.meta as any).env.NUXT_PUBLIC_API_URL);
   put("NEXT_PUBLIC_API_URL", () => (import.meta as any).env.NEXT_PUBLIC_API_URL);
   put("NEXT_PUBLIC_BASE_URL", () => (import.meta as any).env.NEXT_PUBLIC_BASE_URL);
@@ -118,15 +126,24 @@ function dynamicBags(): EnvBag[] {
   return bags;
 }
 
-/** Ordered list of env var names consulted by {@link detectBaseUrl}. */
+/**
+ * Ordered list of env var names consulted by {@link detectBaseUrl}.
+ * Vite's own `BASE_URL` is deliberately absent: it is the app's public path, not an API.
+ */
 export const BASE_URL_KEYS = [
   "NEXT_PUBLIC_API_URL",
+  "NEXT_PUBLIC_API_BASE_URL",
   "NEXT_PUBLIC_BASE_URL",
   "VITE_API_URL",
+  "VITE_API_BASE_URL",
   "VITE_BASE_URL",
   "NUXT_PUBLIC_API_URL",
+  "REACT_APP_API_URL",
+  "EXPO_PUBLIC_API_URL",
   "PUBLIC_API_URL",
+  "PUBLIC_API_BASE_URL",
   "API_URL",
+  "API_BASE_URL",
 ] as const;
 
 /** Best-effort base URL discovery across Next, Vite, Nuxt, SvelteKit and Node. */
@@ -146,4 +163,43 @@ export function detectBaseUrl(): string {
   }
 
   return "";
+}
+
+/** The page's origin where there is a page (a window or a worker), else `""`. */
+export function pageOrigin(): string {
+  try {
+    const origin = typeof location !== "undefined" ? location.origin : "";
+    return origin && origin !== "null" ? origin : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * The base URL a client uses: the explicit option, else an env variable, else
+ * the page origin. Relative values are resolved against the page, as `fetch`
+ * would — and so a Blob worker, whose own base is `blob:`, gets a usable one.
+ */
+export function resolveBaseUrl(explicit?: string): string {
+  const base = explicit ?? (detectBaseUrl() || pageOrigin());
+  try {
+    if (base && typeof location !== "undefined") return new URL(base, location.href).href.replace(/\/+$/, "");
+  } catch {
+    /* not resolvable against this page: keep it as given */
+  }
+  return base.replace(/\/+$/, "");
+}
+
+const HAS_SCHEME = /^[a-z][a-z\d+\-.]*:/i;
+
+/**
+ * Fails fast, and helpfully, on a URL that cannot be fetched: a relative path
+ * where there is no page to resolve it against (Node, SSR, tests).
+ */
+export function assertFetchable(url: string): void {
+  if (HAS_SCHEME.test(url) || typeof location !== "undefined") return;
+  throw new Error(
+    `No base URL for "${url}". Pass createClient({ baseUrl: "https://api.example.com" }) ` +
+      `or set one of ${BASE_URL_KEYS.join(", ")}.`,
+  );
 }

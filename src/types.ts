@@ -13,6 +13,12 @@ export type AuthMode = "header" | "cookie";
 /** Where tokens are kept between page loads (header mode only). */
 export type StorageKind = "memory" | "local" | "session" | "cookie";
 
+/**
+ * How a response body is read. `"auto"` (default) parses JSON, reads textual
+ * types as text, and returns anything else (files, images, PDFs) as a `Blob`.
+ */
+export type ResponseFormat = "auto" | "json" | "text" | "blob" | "arrayBuffer";
+
 // ── Responses ────────────────────────────────────────────
 
 /** Standardized response envelope returned by every call. Never throws by default. */
@@ -25,6 +31,11 @@ export interface IRes<R = unknown> {
   message: string;
   /** Parsed payload. Unwrapped from `{ data: ... }` unless `fullData` is set. */
   data?: R;
+  /**
+   * The whole parsed payload, set only when `data` was unwrapped from it — so
+   * siblings of `data` (pagination `meta`, `links`, …) stay reachable.
+   */
+  body?: unknown;
   /** Always `false` on a settled response. Kept for UI-state ergonomics. */
   loading: boolean;
   /** Field-level validation errors, when the server sends them. */
@@ -261,8 +272,15 @@ export interface RequestConfig<T = unknown>
   /** Query-string parameters. Nested objects and arrays supported. */
   params?: Params<T>;
 
-  /** Override the base URL for this single request. */
+  /**
+   * Override the base URL for this single request. The access token and CSRF
+   * header are only attached when its origin is the client's `baseUrl` origin
+   * or listed in `authOrigins`.
+   */
   baseUrl?: string;
+
+  /** How to read the response body. Default `"auto"`. */
+  responseType?: ResponseFormat;
 
   /** Per-request timeout in ms. Falls back to the client default. */
   timeout?: number;
@@ -469,6 +487,14 @@ export interface ClientOptions {
    */
   baseUrl?: string;
 
+  /**
+   * Extra origins allowed to receive the access token and CSRF header, e.g.
+   * `["https://files.example.com"]`. The `baseUrl` origin is always allowed;
+   * every other absolute URL is sent without credentials headers, so a
+   * request to a third party (or one injected by XSS) can't read the token.
+   */
+  authOrigins?: string[];
+
   /** Default request timeout in ms. Default `30000`. */
   timeout?: number;
 
@@ -538,7 +564,7 @@ export interface ClientOptions {
    * `document.cookie` does not exist). Takes precedence over
    * `xsrfCookieName`.
    */
-  getCsrfToken?: () => string | undefined;
+  getCsrfToken?: () => string | undefined | Promise<string | undefined>;
 
   /** Headers merged into every request. */
   headers?: Record<string, string>;

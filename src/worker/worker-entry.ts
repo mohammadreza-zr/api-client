@@ -22,10 +22,36 @@ const aborters = new Map<number, AbortController>();
 
 const send = (msg: WorkerMessage): void => self.postMessage(msg);
 
-// ── storage bridge ───────────────────────────────────────
+// ── host bridge ──────────────────────────────────────────
 
-let storageSeq = 0;
-const storageWaiters = new Map<number, (tokens: TokenPair | null) => void>();
+let bridgeSeq = 0;
+const bridgeWaiters = new Map<number, (value: unknown) => void>();
+
+/**
+ * Asks the main thread for something only it has (storage, cookies).
+ * A host that never answers must not wedge the auth flow: after 5s the
+ * answer is `fallback`.
+ */
+function askHost<T>(build: (id: number) => WorkerMessage, fallback: T): Promise<T> {
+  const id = ++bridgeSeq;
+  return new Promise<T>((resolve) => {
+    const timer = setTimeout(() => {
+      if (bridgeWaiters.delete(id)) resolve(fallback);
+    }, 5_000);
+    bridgeWaiters.set(id, (value) => {
+      clearTimeout(timer);
+      resolve(value as T);
+    });
+    send(build(id));
+  });
+}
+
+function answerHost(id: number, value: unknown): void {
+  const waiter = bridgeWaiters.get(id);
+  if (!waiter) return;
+  bridgeWaiters.delete(id);
+  waiter(value);
+}
 
 /**
  * Persists through the main thread.
@@ -40,20 +66,7 @@ const storageWaiters = new Map<number, (tokens: TokenPair | null) => void>();
  */
 class HostStorage implements TokenStorage {
   private ask(op: "get" | "set" | "clear", tokens?: TokenPair): Promise<TokenPair | null> {
-    const id = ++storageSeq;
-    return new Promise<TokenPair | null>((resolve) => {
-      // A host that never answers must not wedge the auth flow forever.
-      const timer = setTimeout(() => {
-        if (storageWaiters.delete(id)) resolve(null);
-      }, 5_000);
-
-      storageWaiters.set(id, (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      });
-
-      send({ kind: "storage", id, op, tokens });
-    });
+    return askHost<TokenPair | null>((id) => ({ kind: "storage", id, op, tokens }), null);
   }
 
   get(): Promise<TokenPair | null> {
@@ -80,15 +93,20 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
         // Persistent kinds are proxied to the host; memory stays local.
         const kind = msg.options.storage ?? "memory";
         const storage = kind === "memory" ? undefined : new HostStorage();
+        const getCsrfToken = msg.options.csrf
+          ? () => askHost<string | undefined>((id) => ({ kind: "csrf", id }), undefined)
+          : undefined;
 
-        client = new CoreClient({
-          ...msg.options,
+        client = new CoreClient(
+          {
+            ...msg.options,
+            getCsrfToken,
+            onAuthStateChanged: (state) => send({ kind: "authChanged", state }),
+            onAuthFailure: () => send({ kind: "authFailure" }),
+            onLog: (entry: LogEntry) => send({ kind: "log", entry }),
+          },
           storage,
-          multiTab: msg.options.multiTab,
-          onAuthStateChanged: (state) => send({ kind: "authChanged", state }),
-          onAuthFailure: () => send({ kind: "authFailure" }),
-          onLog: (entry: LogEntry) => send({ kind: "log", entry }),
-        });
+        );
         send({ kind: "ready" });
         break;
       }
@@ -112,14 +130,13 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
         break;
       }
 
-      case "storageResult": {
-        const waiter = storageWaiters.get(msg.id);
-        if (waiter) {
-          storageWaiters.delete(msg.id);
-          waiter(msg.tokens);
-        }
+      case "storageResult":
+        answerHost(msg.id, msg.tokens);
         break;
-      }
+
+      case "csrfResult":
+        answerHost(msg.id, msg.token);
+        break;
 
       case "abort": {
         // Abort with a CancelError so the engine reports it as a cancellation
@@ -141,6 +158,7 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
          * passed along so custom key names are stripped too.
          */
         result.data = stripTokenFields(result.data, extractMapping);
+        result.body = stripTokenFields(result.body, extractMapping);
         send({ kind: "result", id: msg.id, result });
         break;
       }
@@ -173,8 +191,7 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
 
       case "refresh": {
         if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
-        const token = await client.refresh();
-        send({ kind: "refreshed", id: msg.id, ok: token !== null });
+        send({ kind: "refreshed", id: msg.id, ok: await client.refresh() });
         break;
       }
 

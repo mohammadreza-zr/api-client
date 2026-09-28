@@ -22,6 +22,13 @@ export class AuthStore {
    */
   private session = false;
 
+  /**
+   * Bumped whenever the session is replaced or ended. A refresh that started
+   * under an older generation must not write its result back: that would
+   * resurrect a session the user just logged out of.
+   */
+  private sessionGeneration = 0;
+
   private inFlight: Promise<unknown> | null = null;
   private listeners = new Set<(state: AuthState) => void>();
   /** The most recent persist, so callers can await durability. */
@@ -31,13 +38,27 @@ export class AuthStore {
 
   /** Rehydrate from persistent storage, if one is configured. */
   async hydrate(): Promise<void> {
-    if (!this.storage) return;
+    const stored = await this.readStored();
+    if (stored) this.apply(stored, false);
+  }
+
+  /** The persisted tokens, without applying them. Corrupt storage reads as empty. */
+  async readStored(): Promise<TokenPair | null> {
+    if (!this.storage) return null;
     try {
-      const stored = await this.storage.get();
-      if (stored) this.apply(stored, false);
+      return (await this.storage.get()) ?? null;
     } catch {
-      /* corrupt storage is not fatal */
+      return null;
     }
+  }
+
+  get generation(): number {
+    return this.sessionGeneration;
+  }
+
+  /** Whether this store holds anything that could authenticate a request. */
+  get hasCredentials(): boolean {
+    return this.session || Boolean(this.access) || Boolean(this.refresh);
   }
 
   // ── state ──────────────────────────────────────────────
@@ -56,7 +77,9 @@ export class AuthStore {
 
   get state(): AuthState {
     return {
-      isAuthenticated: this.session || (Boolean(this.access) && !this.isExpired()),
+      // An expired access token with a refresh token is still a live session:
+      // the next request refreshes silently, so the app must not redirect to login.
+      isAuthenticated: this.session || Boolean(this.refresh) || (Boolean(this.access) && !this.isExpired()),
       expiresAt: this.expiry,
       user: this.user,
     };
@@ -87,18 +110,34 @@ export class AuthStore {
     this.emit();
   }
 
-  /** Store a token pair. Expiry is derived from the JWT when not supplied. */
+  /**
+   * Merges a token pair. Expiry is derived from the JWT when not supplied; a
+   * new opaque token has no known expiry, so it never inherits the old one.
+   */
   apply(tokens: TokenPair, persist = true): void {
-    if (tokens.accessToken !== undefined) this.access = tokens.accessToken;
     if (tokens.refreshToken !== undefined) this.refresh = tokens.refreshToken;
-
-    this.expiry =
-      tokens.expiresAt ??
-      getTokenExpiry(tokens.accessToken ?? this.access) ??
-      this.expiry;
+    if (tokens.accessToken !== undefined) {
+      this.access = tokens.accessToken;
+      this.expiry = tokens.expiresAt ?? getTokenExpiry(tokens.accessToken);
+    } else if (tokens.expiresAt !== undefined) {
+      this.expiry = tokens.expiresAt;
+    }
 
     if (persist) this.pendingWrite = this.persist();
     this.emit();
+  }
+
+  /**
+   * Starts a new session: nothing from the previous one survives. A login
+   * response without a refresh token must not leave the last user's in place.
+   */
+  replace(tokens: TokenPair): void {
+    this.sessionGeneration++;
+    this.access = undefined;
+    this.refresh = undefined;
+    this.expiry = null;
+    this.user = undefined;
+    this.apply(tokens);
   }
 
   /**
@@ -112,7 +151,23 @@ export class AuthStore {
     await this.pendingWrite;
   }
 
+  /**
+   * `setTokens()` semantics: a key given as `undefined` clears that token,
+   * an omitted key keeps it. Extractor results can't use this — they always
+   * carry both keys — so they go through `apply` / `replace` instead.
+   */
+  seed(tokens: TokenPair): void {
+    this.sessionGeneration++;
+    if ("accessToken" in tokens && tokens.accessToken === undefined) {
+      this.access = undefined;
+      this.expiry = null;
+    }
+    if ("refreshToken" in tokens && tokens.refreshToken === undefined) this.refresh = undefined;
+    this.apply(tokens);
+  }
+
   clear(persist = true): void {
+    this.sessionGeneration++;
     this.access = undefined;
     this.refresh = undefined;
     this.expiry = null;

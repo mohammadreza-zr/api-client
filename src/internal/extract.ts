@@ -190,7 +190,8 @@ export function stripTokenFields(body: unknown, mapping?: TokenFieldMap): unknow
 
     const record = value as Record<string, unknown>;
     for (const key of Object.keys(record)) {
-      if (fields.has(key)) delete record[key];
+      // Tokens are strings; `user.access: ["admin"]` is data and must survive.
+      if (fields.has(key) && typeof record[key] === "string") delete record[key];
       else record[key] = walk(record[key], depth + 1);
     }
     return value;

@@ -26,6 +26,7 @@ export type {
   PendingRequest,
   RefreshBodyConfig,
   RequestConfig,
+  ResponseFormat,
   StorageKind,
   TokenExtractor,
   TokenFieldMap,

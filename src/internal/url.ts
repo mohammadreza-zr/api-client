@@ -65,14 +65,20 @@ export function buildQueryString(params: Record<string, unknown>, prefix = ""): 
   return parts.join("&");
 }
 
-/** `/users/{id}` + `{ id: 7 }` → `/users/7` */
+/**
+ * `/users/{id}` + `{ id: 7 }` → `/users/7`
+ *
+ * Values are encoded as one path segment, so `"1/../admin"` or `"x?role=admin"`
+ * cannot rewrite the path or query. Single pass: a value containing `{other}`
+ * is never substituted again.
+ */
 export function applyTemplate(url: string, template?: Record<string, string | number>): string {
   if (!template) return url;
-  let result = url;
-  for (const [key, value] of Object.entries(template)) {
-    result = result.split(`{${key}}`).join(String(value));
-  }
-  return result;
+  return url.replace(/\{([^{}]+)\}/g, (placeholder, key: string) =>
+    Object.prototype.hasOwnProperty.call(template, key)
+      ? encodeURIComponent(String(template[key]))
+      : placeholder,
+  );
 }
 
 /** Joins a base and a path without doubling or dropping slashes. */
@@ -105,7 +111,8 @@ export function buildUrl(input: BuildUrlInput): string {
         `addToUrl contains a falsy segment at index ${bad}: ${JSON.stringify(input.addToUrl)}`,
       );
     }
-    path = `${path.replace(/\/$/, "")}/${input.addToUrl.join("/")}/`;
+    const segments = input.addToUrl.map((segment) => encodeURIComponent(String(segment)));
+    path = `${path.replace(/\/$/, "")}/${segments.join("/")}/`;
   }
 
   path = applyTemplate(path, input.addTemplateToUrl);

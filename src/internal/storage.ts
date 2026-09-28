@@ -1,4 +1,5 @@
-import type { StorageKind, TokenPair, TokenStorage } from "../types";
+import type { ClientOptions, StorageKind, TokenPair, TokenStorage } from "../types";
+import { readCookie } from "./cookie";
 
 /**
  * Token persistence adapters.
@@ -67,9 +68,18 @@ export class WebStorage implements TokenStorage {
   }
 }
 
+/** Browsers drop a cookie over ~4096 bytes (name and attributes included) without an error. */
+const COOKIE_CHUNK_SIZE = 3800;
+/** Tokens are ASCII, which `encodeURIComponent` at most triples. */
+const JSON_CHUNK_SIZE = 1200;
+const CHUNKED_PREFIX = "chunks:";
+
 /**
  * Non-httpOnly cookie storage, for when tokens must survive a reload and be
  * readable by SSR. Uses `SameSite=Lax` and `Secure` on https.
+ *
+ * A JWT pair easily outgrows one cookie, so large values are split across
+ * `<key>.0`, `<key>.1`, … with `<key>` holding the chunk count.
  */
 export class CookieStorage implements TokenStorage {
   constructor(
@@ -78,13 +88,20 @@ export class CookieStorage implements TokenStorage {
   ) {}
 
   get(): TokenPair | null {
-    if (typeof document === "undefined") return null;
-    const match = document.cookie.match(
-      new RegExp(`(?:^|;\\s*)${this.key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}=([^;]*)`),
-    );
-    if (!match) return null;
+    const head = readCookie(this.key);
+    if (!head) return null;
+    let raw = head;
+    if (head.startsWith(CHUNKED_PREFIX)) {
+      const parts: string[] = [];
+      for (let i = 0; i < Number(head.slice(CHUNKED_PREFIX.length)); i++) {
+        const part = readCookie(`${this.key}.${i}`);
+        if (part === undefined) return null;
+        parts.push(part);
+      }
+      raw = parts.join("");
+    }
     try {
-      return JSON.parse(decodeURIComponent(match[1])) as TokenPair;
+      return JSON.parse(raw) as TokenPair;
     } catch {
       return null;
     }
@@ -93,15 +110,43 @@ export class CookieStorage implements TokenStorage {
   set(tokens: TokenPair): void {
     if (typeof document === "undefined") return;
     const expires = new Date(Date.now() + this.days * 86_400_000).toUTCString();
-    const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
-    document.cookie =
-      `${this.key}=${encodeURIComponent(JSON.stringify(tokens))}` +
-      `; Expires=${expires}; Path=/; SameSite=Lax${secure}`;
+    const json = JSON.stringify(tokens);
+    const whole = encodeURIComponent(json);
+    const previous = this.chunkCount();
+
+    if (whole.length <= COOKIE_CHUNK_SIZE) {
+      this.write(this.key, whole, expires);
+      this.removeChunks(0, previous);
+      return;
+    }
+    // Slice before encoding, so no `%XX` escape is split across two cookies.
+    const count = Math.ceil(json.length / JSON_CHUNK_SIZE);
+    for (let i = 0; i < count; i++) {
+      const part = json.slice(i * JSON_CHUNK_SIZE, (i + 1) * JSON_CHUNK_SIZE);
+      this.write(`${this.key}.${i}`, encodeURIComponent(part), expires);
+    }
+    this.removeChunks(count, previous);
+    this.write(this.key, `${CHUNKED_PREFIX}${count}`, expires);
   }
 
   clear(): void {
     if (typeof document === "undefined") return;
-    document.cookie = `${this.key}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/; SameSite=Lax`;
+    this.removeChunks(0, this.chunkCount());
+    this.write(this.key, "", "Thu, 01 Jan 1970 00:00:00 GMT");
+  }
+
+  private chunkCount(): number {
+    const head = readCookie(this.key);
+    return head?.startsWith(CHUNKED_PREFIX) ? Number(head.slice(CHUNKED_PREFIX.length)) || 0 : 0;
+  }
+
+  private removeChunks(from: number, to: number): void {
+    for (let i = from; i < to; i++) this.write(`${this.key}.${i}`, "", "Thu, 01 Jan 1970 00:00:00 GMT");
+  }
+
+  private write(name: string, value: string, expires: string): void {
+    const secure = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `${name}=${value}; Expires=${expires}; Path=/; SameSite=Lax${secure}`;
   }
 }
 
@@ -124,4 +169,10 @@ export function resolveStorage(
     default:
       return new MemoryStorage();
   }
+}
+
+/** The adapter a main-thread client persists through; none in cookie mode, where the server holds the session. */
+export function storageFor(options: ClientOptions): TokenStorage | undefined {
+  if (options.authMode === "cookie") return undefined;
+  return resolveStorage(options.storage ?? "memory", options.storageKey ?? "apiclient");
 }

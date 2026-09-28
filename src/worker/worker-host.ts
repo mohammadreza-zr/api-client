@@ -7,9 +7,7 @@ import type {
   PendingRequest,
   RequestConfig,
   TokenPair,
-  TokenStorage,
 } from "../types";
-import type { HostMessage, SerializableConfig, SerializableOptions, WorkerMessage } from "./protocol";
 import {
   CancelRegistry,
   cancelMessage,
@@ -20,438 +18,146 @@ import {
   reasonOf,
   resolveCancelDefaults,
   type CancelDefaults,
+  type Tracked,
 } from "../internal/cancel";
-import { detectBaseUrl } from "../internal/env";
-import { resolveStorage } from "../internal/storage";
-import { WORKER_SOURCE } from "./worker-source";
+import { CoreClient } from "../internal/core-client";
+import { resolveBaseUrl } from "../internal/env";
+import { errorMessage, failedResult } from "../internal/result";
+import { storageFor } from "../internal/storage";
+import { splitConfig } from "./host-options";
+import { WorkerChannel } from "./worker-channel";
 
 /**
  * Main-thread proxy to a worker running the real client.
  *
- * Tokens never enter this scope. Options and configs are split: everything
- * serializable is forwarded, and the function hooks are applied here around
- * the round trip so behaviour matches main-thread mode exactly.
+ * Tokens never enter this scope while the worker runs. When the worker cannot
+ * start, the host falls back to an in-page `CoreClient` so the app keeps
+ * working, exactly like `worker: false`.
  */
 export class WorkerHost {
-  /** Assigned by `spawn()`; definite-assignment because the constructor only calls it indirectly. */
-  private worker!: Worker;
-  private objectUrl: string | null = null;
-  private seq = 0;
-  /** In-flight RPC calls awaiting a worker reply, keyed by message id. */
-  private calls = new Map<
-    number,
-    { resolve: (value: never) => void; reject: (error: Error) => void }
-  >();
-  private ready!: Promise<void>;
-  /** Resolves the current `ready`, so a crash cannot strand its waiters. */
-  private resolveReady: () => void = () => {};
-  /**
-   * Serialized options, kept so a crashed worker can be re-spawned with the
-   * exact same configuration.
-   */
-  private serializableOptions: SerializableOptions;
-  /** True once the worker has crashed and cannot (or must not) be replaced. */
-  private crashed = false;
-  private crashError: Error | null = null;
-  /** Only one automatic restart is attempted; a second crash fails fast. */
-  private restartAttempted = false;
-  private destroyed = false;
+  private channel: WorkerChannel;
+  /** Set when the worker could not boot; every call then runs in-page. */
+  private inline: CoreClient | null = null;
   private listeners = new Set<(state: AuthState) => void>();
-  private hooks: Pick<ClientOptions, "onAuthStateChanged" | "onAuthFailure" | "onError" | "onLog">;
-  private xsrfCookieName?: string;
-  private xsrfHeaderName: string;
-  private csrfProvider?: () => string | undefined;
-  /** Main-thread storage the worker persists through. `null` for memory. */
-  private storage: TokenStorage | null = null;
-  /**
-   * The cancel registry lives here, not in the worker.
-   *
-   * `api.cancel()` has to be synchronous and has to work before the worker has
-   * even finished booting, so the host tracks requests and translates a
-   * cancellation into the `abort` message the worker already understands.
-   */
+  /** Host-side so `api.cancel()` stays synchronous and works before the worker boots. */
   private cancelDefaults: CancelDefaults;
   private registry = new CancelRegistry();
   private baseUrl: string;
 
-  constructor(options: ClientOptions) {
+  constructor(private options: ClientOptions) {
     this.cancelDefaults = resolveCancelDefaults(options.cancel);
-    this.baseUrl = (options.baseUrl ?? (detectBaseUrl() || pageOrigin())).replace(/\/+$/, "");
-    this.hooks = {
-      onAuthStateChanged: options.onAuthStateChanged,
-      onAuthFailure: options.onAuthFailure,
-      onError: options.onError,
-      onLog: options.onLog,
-    };
-
-    // CSRF is resolved here, not in the worker: `document.cookie` only exists
-    // on the main thread, and a provider function cannot be cloned across.
-    this.xsrfCookieName = options.xsrfCookieName;
-    this.xsrfHeaderName = options.xsrfHeaderName ?? "X-CSRF-Token";
-    this.csrfProvider = options.getCsrfToken;
-
-    /*
-     * Own the storage adapter here, on the main thread.
-     *
-     * `localStorage` / `sessionStorage` / `document.cookie` are Window APIs
-     * that do not exist inside a worker, so a worker-side adapter silently
-     * dropped every write and sessions never survived a reload. The worker
-     * asks us to persist instead. A caller-supplied adapter object also works
-     * this way — it cannot be cloned across the boundary either.
-     */
-    const kind = options.storage ?? "memory";
-    this.storage =
-      kind === "memory" ? null : resolveStorage(kind, options.storageKey ?? "apiclient");
-
-    this.serializableOptions = toSerializableOptions(options);
-    this.spawn();
-  }
-
-  /**
-   * Creates the blob worker and wires it to this host.
-   *
-   * Called once from the constructor and again after a crash when the session
-   * is recoverable (persistent storage lives on the host, so a fresh worker
-   * can hydrate from it). The object URL is created once and reused; it is
-   * only revoked in `destroy()`.
-   */
-  private spawn(): void {
-    if (this.objectUrl === null) {
-      const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
-      this.objectUrl = URL.createObjectURL(blob);
-    }
-
-    const worker = new Worker(this.objectUrl);
-    this.worker = worker;
-
-    worker.onmessage = (event: MessageEvent<WorkerMessage>) => this.receive(event.data);
-    worker.onerror = (event) => {
-      // A stale error event from a replaced worker must not kill the new one.
-      if (this.worker !== worker) return;
-      this.crash(new Error(event.message || "Worker crashed"));
-    };
-
-    this.ready = new Promise<void>((resolve) => {
-      this.resolveReady = resolve;
-      const onReady = (event: MessageEvent<WorkerMessage>) => {
-        if (event.data?.kind === "ready") {
-          worker.removeEventListener("message", onReady);
-          resolve();
-        }
-      };
-      worker.addEventListener("message", onReady);
+    this.baseUrl = resolveBaseUrl(options.baseUrl);
+    this.channel = new WorkerChannel(options, this.baseUrl, {
+      authChanged: (state) => this.emitAuth(state),
+      bootFailed: () => {
+        const inPage = { ...options, baseUrl: this.baseUrl, onAuthStateChanged: (state: AuthState) => this.emitAuth(state) };
+        this.inline = new CoreClient(inPage, storageFor(options));
+      },
     });
-
-    worker.postMessage({ kind: "init", options: this.serializableOptions });
   }
 
-  /**
-   * Handles a dead worker.
-   *
-   * In-flight calls are rejected with an actionable message — a request must
-   * settle, never hang. When the session can be rebuilt (persistent storage
-   * lives on this side of the boundary), one automatic restart is attempted;
-   * otherwise the host fails fast from here on, because the tokens that died
-   * with the worker's closure cannot be recovered on the main thread.
-   */
-  private crash(error: Error): void {
-    if (this.crashed) return;
-    this.crashed = true;
+  /** Whether requests currently run in the worker (false after a boot fallback). */
+  get usesWorker(): boolean {
+    return this.inline === null;
+  }
 
-    const canRestart = !this.destroyed && this.storage !== null && !this.restartAttempted;
-    const message = canRestart
-      ? "The request worker crashed and is being restarted from host storage — retry the request."
-      : "The request worker crashed and cannot be restarted: the session lived in its " +
-        "closure and is lost. Recreate the client and re-authenticate, or pass " +
-        "worker: false to run on the main thread.";
-    const rejection = new Error(message);
-    // Attach the original reason; the message is what users read.
-    (rejection as { cause?: unknown }).cause = error;
-
-    // Unblock any caller still awaiting the boot message — with the worker
-    // gone it would otherwise wait forever.
-    this.resolveReady();
-
-    for (const [, entry] of this.calls) entry.reject(rejection);
-    this.calls.clear();
-
-    if (canRestart) {
-      this.restartAttempted = true;
+  private emitAuth(state: AuthState): void {
+    this.options.onAuthStateChanged?.(state);
+    for (const listener of this.listeners) {
       try {
-        this.spawn();
-        this.crashed = false;
-        this.crashError = null;
+        listener(state);
       } catch {
-        // Worker construction failed (e.g. CSP blocked the blob) — stay dead.
-        this.crashError = rejection;
+        /* one bad listener must not break the others */
       }
-    } else {
-      this.crashError = rejection;
     }
   }
 
-  // ── plumbing ───────────────────────────────────────────
-
-  private dispatch(msg: HostMessage): void {
-    this.worker.postMessage(msg);
-  }
-
-  private receive(msg: WorkerMessage): void {
-    switch (msg.kind) {
-      case "result":
-      case "authState":
-      case "refreshed":
-      case "void": {
-        const id = (msg as { id: number }).id;
-        const entry = this.calls.get(id);
-        if (!entry) return;
-        this.calls.delete(id);
-        if (msg.kind === "result") entry.resolve(msg.result as never);
-        else if (msg.kind === "authState") entry.resolve(msg.state as never);
-        else if (msg.kind === "refreshed") entry.resolve(msg.ok as never);
-        else entry.resolve(undefined as never);
-        break;
-      }
-
-      case "failure": {
-        const entry = this.calls.get(msg.id);
-        if (!entry) return;
-        this.calls.delete(msg.id);
-        entry.reject(new Error(msg.message));
-        break;
-      }
-
-      case "authChanged": {
-        this.hooks.onAuthStateChanged?.(msg.state);
-        for (const listener of this.listeners) {
-          try {
-            listener(msg.state);
-          } catch {
-            /* ignore */
-          }
-        }
-        break;
-      }
-
-      case "authFailure":
-        this.hooks.onAuthFailure?.();
-        break;
-
-      case "log":
-        if (this.hooks.onLog) this.hooks.onLog(msg.entry as never);
-        else console.info("[api-client]", msg.entry);
-        break;
-
-      case "storage":
-        void this.serveStorage(msg.id, msg.op, msg.tokens);
-        break;
-    }
-  }
-
-  /**
-   * Runs one storage operation for the worker and posts the answer back.
-   * Always replies, even on failure, so the worker never waits on a dead call.
-   */
-  private async serveStorage(
-    id: number,
-    op: "get" | "set" | "clear",
-    tokens?: TokenPair,
-  ): Promise<void> {
-    let result: TokenPair | null = null;
-    try {
-      if (!this.storage) {
-        result = null;
-      } else if (op === "get") {
-        result = (await this.storage.get()) ?? null;
-      } else if (op === "set" && tokens) {
-        await this.storage.set(tokens);
-      } else if (op === "clear") {
-        await this.storage.clear();
-      }
-    } catch {
-      // Quota, Safari private mode, disabled cookies — never fatal.
-      result = null;
-    }
-
-    try {
-      this.dispatch({ kind: "storageResult", id, tokens: result });
-    } catch {
-      /* worker already terminated */
-    }
-  }
-
-  private async call<T>(
-    build: (id: number) => HostMessage,
-    signal?: AbortSignal | null,
-  ): Promise<T> {
-    await this.ready;
-    if (this.destroyed) throw new Error("Client destroyed");
-    if (this.crashed) throw this.crashError ?? new Error("The request worker is unavailable");
-    const id = ++this.seq;
-
-    return new Promise<T>((resolve, reject) => {
-      this.calls.set(id, { resolve: resolve as never, reject });
-
-      if (signal) {
-        if (signal.aborted) {
-          this.calls.delete(id);
-          reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
-          return;
-        }
-        signal.addEventListener(
-          "abort",
-          () => {
-            // Forward the reason so the worker's engine can report it.
-            this.dispatch({ kind: "abort", id, reason: reasonOf(signal.reason) });
-          },
-          { once: true },
-        );
-      }
-
-      this.dispatch(build(id));
-    });
+  /** Waits for boot, then runs in the page after a fallback or in the worker otherwise. */
+  private async route<T>(inPage: (client: CoreClient) => Promise<T>, inWorker: () => Promise<T>): Promise<T> {
+    await this.channel.whenReady();
+    return this.inline ? inPage(this.inline) : inWorker();
   }
 
   // ── requests ───────────────────────────────────────────
 
-  /** Reads the CSRF token on the main thread, where cookies are visible. */
-  private csrfToken(): string | undefined {
-    if (this.csrfProvider) {
-      try {
-        return this.csrfProvider();
-      } catch {
-        return undefined;
-      }
-    }
-    if (!this.xsrfCookieName || typeof document === "undefined") return undefined;
-    const escaped = this.xsrfCookieName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]*)`));
-    if (!match) return undefined;
-    try {
-      return decodeURIComponent(match[1]);
-    } catch {
-      return match[1];
-    }
+  private track(method: HttpMethod, url: string, config?: RequestConfig<unknown>): Tracked | undefined {
+    if (!isCancelable(method, config, this.cancelDefaults)) return undefined;
+    return this.registry.track({
+      method,
+      url: previewUrl(url, this.baseUrl, config),
+      key: config?.cancelKey,
+      groups: groupsOf(config),
+      takeLatest: config?.takeLatest ?? this.cancelDefaults.takeLatest,
+    });
   }
 
-  private async request<R>(
-    method: HttpMethod,
-    url: string,
-    body?: unknown,
-    config?: RequestConfig<R>,
-  ): Promise<IRes<R>> {
-    const { serializable, beforeFunc, afterFunc, beforeSelectOptions, signal } = splitConfig(config);
+  private async request<R>(method: HttpMethod, url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>> {
+    const tracked = this.track(method, url, config as RequestConfig<unknown> | undefined);
+    const { signal, release } = linkSignals([config?.signal, tracked?.signal]);
+    const linked = config?.signal || tracked ? signal : undefined;
 
-    const payload = beforeFunc ? beforeFunc(body) : body;
-
-    // A ReadableStream cannot be structured-cloned into the worker. Rather
-    // than let postMessage throw an opaque DataCloneError, say so plainly.
-    if (typeof ReadableStream !== "undefined" && payload instanceof ReadableStream) {
-      const failure: IRes<R> = {
-        statusCode: 0,
-        status: false,
-        message:
-          "A ReadableStream body cannot be sent through a Web Worker. " +
-          "Create this client with `worker: false`, or send a Blob/File/FormData instead.",
-        loading: false,
-        error: new Error("Stream body is not transferable to a worker"),
-      };
-      if (!config?.hideErrorMessage) this.hooks.onError?.(failure);
-      return failure;
-    }
-
-    // Mirror the CSRF cookie into a header before the config crosses over.
-    let forwarded = serializable;
-    if (method !== "GET") {
-      const csrf = this.csrfToken();
-      if (csrf) {
-        const existing = forwarded?.headers ?? {};
-        const alreadySet = Object.keys(existing).some(
-          (k) => k.toLowerCase() === this.xsrfHeaderName.toLowerCase(),
-        );
-        if (!alreadySet) {
-          forwarded = { ...forwarded, headers: { ...existing, [this.xsrfHeaderName]: csrf } };
-        }
-      }
-    }
-
-    /*
-     * Track on the host, abort in the worker.
-     *
-     * The registry cannot live in the worker: `api.cancel()` is synchronous
-     * and may fire before the worker has finished booting. So the host owns
-     * the bookkeeping, and a cancellation becomes the `abort` message the
-     * worker already handles — the real `fetch` genuinely stops.
-     */
-    const tracked = isCancelable(method, config as RequestConfig<unknown> | undefined, this.cancelDefaults)
-      ? this.registry.track({
-          method,
-          url: previewUrl(url, this.baseUrl, config as RequestConfig<unknown> | undefined),
-          key: config?.cancelKey,
-          groups: groupsOf(config as RequestConfig<unknown> | undefined),
-          takeLatest: config?.takeLatest ?? this.cancelDefaults.takeLatest,
-        })
-      : undefined;
-
-    // Merge the caller's signal with the registry's, so either can stop it.
-    const { signal: linked, release } = linkSignals([signal, tracked?.signal]);
-
-    let result: IRes<R>;
     try {
-      result = await this.call<IRes<R>>(
-        (id) => ({ kind: "request", id, method, url, body: payload, config: forwarded }),
-        signal || tracked ? linked : undefined,
+      return await this.route(
+        // The host registry already tracks it; the in-page client must not track it twice.
+        (client) => client.send<R>(method, url, body, { ...config, signal: linked, cancelable: false }),
+        () => this.requestInWorker<R>(method, url, body, config, linked),
       );
-    } catch (error) {
-      const canceled = (error as Error)?.name === "AbortError";
-      result = {
-        statusCode: canceled ? 0 : 500,
-        status: false,
-        message: canceled
-          ? cancelMessage(error)
-          : ((error as Error)?.message ?? "Worker request failed"),
-        loading: false,
-        error,
-      };
-      if (canceled) {
-        result.canceled = true;
-        const reason = reasonOf(error);
-        if (reason) result.cancelReason = reason;
-      }
     } finally {
       release();
       tracked?.release();
     }
+  }
 
-    // Re-apply the transforms the structured-clone boundary could not carry.
-    if (result.status) {
-      let data: unknown = result.data;
-      if (beforeSelectOptions) data = beforeSelectOptions(data as never);
-      if (afterFunc) data = afterFunc(data as never);
-      result.data = data as R;
+  private async requestInWorker<R>(
+    method: HttpMethod,
+    url: string,
+    body: unknown,
+    config: RequestConfig<R> | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<IRes<R>> {
+    const { serializable, beforeFunc, afterFunc, beforeSelectOptions } = splitConfig(config);
+    let result: IRes<R>;
+    try {
+      const payload = beforeFunc ? beforeFunc(body) : body;
+      // A ReadableStream cannot be structured-cloned; say so instead of a DataCloneError.
+      if (typeof ReadableStream !== "undefined" && payload instanceof ReadableStream) {
+        result = failedResult(
+          "A ReadableStream body cannot be sent through a Web Worker. " +
+            "Create this client with `worker: false`, or send a Blob/File/FormData instead.",
+          new Error("Stream body is not transferable to a worker"),
+        );
+      } else {
+        result = await this.channel.call<IRes<R>>(
+          (id) => ({ kind: "request", id, method, url, body: payload, config: serializable }),
+          signal,
+        );
+        // Re-apply the transforms the structured-clone boundary could not carry.
+        if (result.status) {
+          let data: unknown = result.data;
+          if (beforeSelectOptions) data = beforeSelectOptions(data as never);
+          if (afterFunc) data = afterFunc(data as never);
+          result.data = data as R;
+        }
+      }
+    } catch (error) {
+      result = toFailure<R>(error);
     }
 
     // A cancellation is deliberate, so it must not raise the error toast.
-    if (!result.status && !result.canceled && !config?.hideErrorMessage) {
-      this.hooks.onError?.(result);
-    }
-
+    if (!result.status && !result.canceled && !config?.hideErrorMessage) this.options.onError?.(result);
     return result;
   }
 
   // ── cancellation ───────────────────────────────────────
 
-  /** Cancels matching in-flight requests. Returns how many were stopped. */
   cancel(selector?: CancelSelector, reason?: string): number {
     return this.registry.cancel(selector, reason);
   }
 
-  /** The cancelable requests currently in flight. */
   pending(selector?: CancelSelector): PendingRequest[] {
     return this.registry.pending(selector);
   }
 
-  /** Whether a canceled request should reject. Independent of `throwError`. */
   shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean {
     return config?.throwOnCancel ?? this.cancelDefaults.throwOnCancel;
   }
@@ -474,159 +180,84 @@ export class WorkerHost {
 
   // ── auth ───────────────────────────────────────────────
 
-  async login<R = unknown>(body: unknown, config?: RequestConfig<R>): Promise<IRes<R>> {
-    const { serializable } = splitConfig(config);
-    const result = await this.call<IRes<R>>((id) => ({ kind: "login", id, body, config: serializable }));
-    if (!result.status && !config?.hideErrorMessage) this.hooks.onError?.(result);
-    return result;
+  login<R = unknown>(body: unknown, config?: RequestConfig<R>): Promise<IRes<R>> {
+    return this.route(
+      (client) => client.login(body, config),
+      async () => {
+        const { serializable } = splitConfig(config);
+        const result = await this.channel
+          .call<IRes<R>>((id) => ({ kind: "login", id, body, config: serializable }))
+          .catch((error: unknown) => toFailure<R>(error));
+        if (!result.status && !config?.hideErrorMessage) this.options.onError?.(result);
+        return result;
+      },
+    );
   }
 
-  async logout<R = unknown>(config?: RequestConfig<R>): Promise<IRes<R>> {
-    const { serializable } = splitConfig(config);
-    return this.call<IRes<R>>((id) => ({ kind: "logout", id, config: serializable }));
+  logout<R = unknown>(config?: RequestConfig<R>): Promise<IRes<R>> {
+    return this.route(
+      (client) => client.logout(config),
+      () =>
+        this.channel
+          .call<IRes<R>>((id) => ({ kind: "logout", id, config: splitConfig(config).serializable }))
+          .catch((error: unknown) => toFailure<R>(error)),
+    );
   }
 
   setTokens(tokens: TokenPair): Promise<void> {
-    return this.call<void>((id) => ({ kind: "setTokens", id, tokens }));
+    return this.route(
+      (client) => client.setTokens(tokens),
+      () => this.channel.call<void>((id) => ({ kind: "setTokens", id, tokens })),
+    );
   }
 
   restoreSession(url?: string): Promise<AuthState> {
-    return this.call<AuthState>((id) => ({ kind: "restoreSession", id, url }));
+    return this.route(
+      (client) => client.restoreSession(url),
+      () => this.channel.call<AuthState>((id) => ({ kind: "restoreSession", id, url })),
+    );
   }
 
   getAuthState(): Promise<AuthState> {
-    return this.call<AuthState>((id) => ({ kind: "authState", id }));
+    return this.route(
+      (client) => client.getAuthState(),
+      () => this.channel.call<AuthState>((id) => ({ kind: "authState", id })),
+    );
   }
 
   refresh(): Promise<boolean> {
-    // The token itself intentionally never leaves the worker.
-    return this.call<boolean>((id) => ({ kind: "refresh", id }));
+    return this.route(
+      (client) => client.refresh(),
+      () => this.channel.call<boolean>((id) => ({ kind: "refresh", id })),
+    );
   }
 
+  /**
+   * No immediate call with a cached state: the worker hydrates asynchronously,
+   * and firing `{ isAuthenticated: false }` first would redirect apps to
+   * /login before the real state arrives. Use `getAuthState()` for a snapshot.
+   */
   onAuthStateChange(listener: (state: AuthState) => void): () => void {
-    /*
-     * Deliberately no immediate call with a cached state: the first auth
-     * snapshot may not have crossed the boundary yet (the worker hydrates
-     * asynchronously), and firing `{ isAuthenticated: false }` at subscribe
-     * time would make apps redirect to /login before the real state arrives.
-     * This matches the inline implementation, which only fires on actual
-     * changes. Use `getAuthState()` for the current snapshot.
-     */
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   destroy(): void {
-    this.destroyed = true;
-    try {
-      this.dispatch({ kind: "destroy" });
-    } catch {
-      /* already gone */
-    }
     this.registry.cancel(undefined, "client destroyed");
-    this.worker.terminate();
-    for (const [, entry] of this.calls) entry.reject(new Error("Client destroyed"));
-    this.calls.clear();
+    this.channel.destroy();
+    this.inline?.destroy();
     this.listeners.clear();
-    if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
-    this.objectUrl = null;
   }
 }
 
-// ── helpers ──────────────────────────────────────────────
-
-/** The page origin, so relative URLs behave the same inside a Blob worker. */
-function pageOrigin(): string {
-  try {
-    return typeof location !== "undefined" && location.origin && location.origin !== "null"
-      ? location.origin
-      : "";
-  } catch {
-    return "";
+/** A thrown RPC error as a result: an abort becomes a cancellation, anything else a client-side failure. */
+function toFailure<R>(error: unknown): IRes<R> {
+  if ((error as Error | undefined)?.name !== "AbortError") {
+    return failedResult(errorMessage(error, "Worker request failed"), error);
   }
-}
-
-function toSerializableOptions(options: ClientOptions): SerializableOptions {
-  const {
-    storage,
-    extractTokens,
-    buildRefreshBody,
-    onAuthStateChanged: _a,
-    onAuthFailure: _b,
-    onError: _c,
-    onLog: _d,
-    worker: _e,
-    // A function cannot be structured-cloned; the host resolves the token and
-    // forwards the resulting string with each request instead.
-    getCsrfToken: _f,
-    // Cancellation is tracked on the host, which forwards `abort` messages.
-    cancel: _g,
-    ...rest
-  } = options;
-
-  return {
-    ...rest,
-    /*
-     * Function forms disable worker mode upstream, so only the declarative
-     * (serializable) forms can reach this point. Forward them so the worker
-     * builds the same extractor / refresh body the host would.
-     */
-    extractTokens: typeof extractTokens === "function" ? undefined : extractTokens,
-    buildRefreshBody: typeof buildRefreshBody === "function" ? undefined : buildRefreshBody,
-    /*
-     * Forward only the *kind*, so the worker knows whether to persist at all.
-     * A custom adapter object is served from the host, and is reported to the
-     * worker as "local" purely so it opts into the storage bridge.
-     */
-    storage: typeof storage === "object" ? "local" : storage,
-    /*
-     * Resolve the base URL here, on the main thread.
-     *
-     * Two reasons this cannot be left to the worker:
-     *
-     * 1. The worker runs from a Blob, so no bundler touched its source and
-     *    `process.env` / `import.meta.env` are both absent — detection there
-     *    would always yield "".
-     *
-     * 2. A worker created from `URL.createObjectURL` has a `blob:` base URL,
-     *    and a relative request cannot resolve against it (`new URL("/me",
-     *    "blob:http://host/uuid")` throws). On the main thread a relative URL
-     *    would simply hit the page origin, so fall back to that origin to keep
-     *    worker and inline mode behaving identically.
-     */
-    baseUrl: options.baseUrl ?? (detectBaseUrl() || pageOrigin()),
-  };
-}
-
-function splitConfig<R>(config?: RequestConfig<R>): {
-  serializable?: SerializableConfig;
-  beforeFunc?: (body: unknown) => unknown;
-  afterFunc?: (data: never) => unknown;
-  beforeSelectOptions?: (data: never) => unknown;
-  signal?: AbortSignal | null;
-} {
-  if (!config) return {};
-
-  const {
-    beforeFunc,
-    afterFunc,
-    beforeSelectOptions,
-    signal,
-    // Cancellation metadata stays on the host: it drives the registry here,
-    // and the worker only ever needs the resulting `abort` message.
-    cancelable: _cancelable,
-    cancelKey: _cancelKey,
-    cancelGroup: _cancelGroup,
-    takeLatest: _takeLatest,
-    throwOnCancel: _throwOnCancel,
-    ...rest
-  } = config;
-
-  return {
-    serializable: rest as SerializableConfig,
-    beforeFunc,
-    afterFunc: afterFunc as ((data: never) => unknown) | undefined,
-    beforeSelectOptions: beforeSelectOptions as ((data: never) => unknown) | undefined,
-    signal,
-  };
+  const result = failedResult<R>(cancelMessage(error), error);
+  result.canceled = true;
+  const reason = reasonOf(error);
+  if (reason) result.cancelReason = reason;
+  return result;
 }

@@ -4,26 +4,25 @@ import { hasBroadcastChannel, isServer } from "./env";
 export type TabMessage =
   | { type: "refreshed"; tabId: string; expiresAt: number | null }
   | { type: "logout"; tabId: string }
-  | { type: "login"; tabId: string; expiresAt: number | null }
-  | { type: "claim"; tabId: string; at: number };
+  | { type: "login"; tabId: string; expiresAt: number | null };
+
+interface LockManagerLike {
+  request<T>(name: string, task: () => Promise<T>): Promise<T>;
+}
 
 /**
- * Keeps auth state aligned across tabs.
- *
- * Also provides best-effort leader election so that when several tabs wake up
- * at once (e.g. after sleep) only one of them drives the token refresh.
+ * Keeps auth state aligned across tabs, and serializes their token refreshes
+ * so a rotating refresh token is never spent twice.
  */
 export class TabSync {
   private channel: BroadcastChannel | null = null;
   private handlers = new Set<(msg: TabMessage) => void>();
   readonly tabId: string;
-
-  /** Lowest known claim timestamp wins; ties break on tabId. */
-  private leaderClaim: { tabId: string; at: number };
+  private lockName: string;
 
   constructor(channelName: string, enabled = true) {
     this.tabId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    this.leaderClaim = { tabId: this.tabId, at: Date.now() };
+    this.lockName = `${channelName}.refresh`;
 
     // Never open a channel on the server: there are no other tabs to sync
     // with, and Node's BroadcastChannel is a ref'd handle that would keep the
@@ -37,14 +36,6 @@ export class TabSync {
       this.channel.onmessage = (event: MessageEvent<TabMessage>) => {
         const msg = event.data;
         if (!msg || msg.tabId === this.tabId) return;
-
-        if (msg.type === "claim") {
-          if (msg.at < this.leaderClaim.at || (msg.at === this.leaderClaim.at && msg.tabId < this.leaderClaim.tabId)) {
-            this.leaderClaim = { tabId: msg.tabId, at: msg.at };
-          }
-          return;
-        }
-
         for (const handler of this.handlers) {
           try {
             handler(msg);
@@ -76,14 +67,14 @@ export class TabSync {
   }
 
   /**
-   * Announces intent to refresh and reports whether this tab should lead.
-   * Without BroadcastChannel every tab leads (single-tab behaviour).
+   * Runs `task` while holding a lock shared by every tab of this origin
+   * (Web Locks API, available in windows and workers). Where the API is
+   * missing, or sync is off, the task simply runs.
    */
-  claimLeadership(): boolean {
-    if (!this.channel) return true;
-    this.leaderClaim = { tabId: this.tabId, at: Date.now() };
-    this.post({ type: "claim", tabId: this.tabId, at: this.leaderClaim.at });
-    return this.leaderClaim.tabId === this.tabId;
+  exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const locks = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator?.locks;
+    if (!this.channel || typeof locks?.request !== "function") return task();
+    return locks.request(this.lockName, task);
   }
 
   destroy(): void {

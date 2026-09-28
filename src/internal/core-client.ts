@@ -8,6 +8,7 @@ import type {
   RequestConfig,
   TokenExtractor,
   TokenPair,
+  TokenStorage,
 } from "../types";
 import { AuthStore } from "./auth-store";
 import { TabSync } from "./broadcast";
@@ -19,22 +20,16 @@ import {
   resolveCancelDefaults,
   type CancelDefaults,
 } from "./cancel";
+import { createCsrfReader, type CsrfReader } from "./cookie";
 import { executeRequest, type EngineContext } from "./engine";
 import { extractUser, normalizeExtractor, normalizeRefreshBody } from "./extract";
-import { detectBaseUrl } from "./env";
-import { resolveStorage } from "./storage";
+import { trustedOrigins } from "./origin";
+import { runRefresh } from "./refresh";
 import { joinUrl } from "./url";
 
-/** Reads a single cookie value by name. */
-function readCookie(name: string): string | undefined {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]*)`));
-  if (!match) return undefined;
-  try {
-    return decodeURIComponent(match[1]);
-  } catch {
-    return match[1];
-  }
+/** Local storage and cookies are visible to every tab; memory and sessionStorage are not. */
+function isSharedStorage(storage: ClientOptions["storage"]): boolean {
+  return typeof storage === "object" || storage === "local" || storage === "cookie";
 }
 
 /**
@@ -55,20 +50,30 @@ export class CoreClient {
   private defaultHeaders: Record<string, string>;
   private extractTokens: TokenExtractor;
   private buildRefreshBody: (refresh?: string) => unknown;
-  private xsrfCookieName?: string;
   private xsrfHeaderName: string;
-  private csrfProvider?: () => string | undefined;
+  private readCsrf: CsrfReader;
+  private trusted: ReadonlySet<string>;
+  private sharedSession: boolean;
+  private siblingRefreshedAt = 0;
   private hooks: Pick<ClientOptions, "onAuthStateChanged" | "onAuthFailure" | "onError" | "onLog">;
   private hydrated: Promise<void>;
   private disposed = false;
   private cancelDefaults: CancelDefaults;
   private registry = new CancelRegistry();
 
-  constructor(options: ClientOptions = {}) {
+  /**
+   * `storage` is the adapter tokens persist through (`storageFor` on the main
+   * thread, a host proxy in the worker); none means memory only. It is passed
+   * in so the worker bundle never ships adapters it cannot use, while
+   * `options.storage` still names the kind — whether tabs share the session
+   * depends on what the host really stores into.
+   */
+  constructor(options: ClientOptions = {}, storage?: TokenStorage) {
     const authMode = options.authMode ?? "header";
 
     this.opts = {
-      baseUrl: (options.baseUrl ?? detectBaseUrl()).replace(/\/+$/, ""),
+      // Resolved by the caller (`resolveBaseUrl`), so env detection never ships in the worker bundle.
+      baseUrl: (options.baseUrl ?? "").replace(/\/+$/, ""),
       timeout: options.timeout ?? 30_000,
       authMode,
       credentials: options.credentials ?? (authMode === "cookie" ? "include" : "same-origin"),
@@ -78,11 +83,12 @@ export class CoreClient {
       refreshSkewMs: options.refreshSkewMs ?? 30_000,
     };
 
-    this.defaultHeaders = { "Content-Type": "application/json", ...options.headers };
+    this.defaultHeaders = { ...options.headers };
     this.cancelDefaults = resolveCancelDefaults(options.cancel);
-    this.xsrfCookieName = options.xsrfCookieName;
     this.xsrfHeaderName = options.xsrfHeaderName ?? "X-CSRF-Token";
-    this.csrfProvider = options.getCsrfToken;
+    this.readCsrf = createCsrfReader(options);
+    this.trusted = trustedOrigins(this.opts.baseUrl, options.authOrigins);
+    this.sharedSession = authMode === "cookie" || isSharedStorage(options.storage);
     // Accepts both the function forms and the declarative (serializable)
     // TokenFieldMap / RefreshBodyConfig forms.
     this.extractTokens = normalizeExtractor(options.extractTokens);
@@ -96,9 +102,7 @@ export class CoreClient {
 
     const storageKey = options.storageKey ?? "apiclient";
     // Cookie mode keeps tokens server-side; nothing to persist locally.
-    const storage = authMode === "cookie" ? undefined : resolveStorage(options.storage ?? "memory", storageKey);
-
-    this.auth = new AuthStore(storage);
+    this.auth = new AuthStore(authMode === "cookie" ? undefined : storage);
     this.auth.subscribe((state) => this.hooks.onAuthStateChanged?.(state));
 
     this.tabs = new TabSync(`${storageKey}.auth`, options.multiTab !== false);
@@ -119,6 +123,7 @@ export class CoreClient {
     }
 
     if (msg.type === "refreshed" || msg.type === "login") {
+      this.siblingRefreshedAt = Date.now();
       /*
        * Cookie mode: there is no shared storage to re-read — `hydrate()` is a
        * no-op without an adapter — but the httpOnly cookie is origin-scoped,
@@ -144,6 +149,7 @@ export class CoreClient {
       defaultHeaders: this.defaultHeaders,
       credentials: this.opts.credentials,
       authMode: this.opts.authMode,
+      trustedOrigins: this.trusted,
       getAccessToken: () => this.auth.accessToken,
       refresh: () => this.refresh(),
       shouldPreemptivelyRefresh: (skewMs?: number) => {
@@ -155,112 +161,52 @@ export class CoreClient {
         if (!this.auth.accessToken || !this.auth.refreshToken) return false;
         return this.auth.isExpired(window);
       },
-      getCsrfToken: () => this.readCsrfToken(),
+      getCsrfToken: this.readCsrf,
       csrfHeaderName: this.xsrfHeaderName,
       onLog: this.hooks.onLog,
     };
   }
 
   /**
-   * Resolves the CSRF token.
+   * Refreshes the access token. Concurrent callers share one network call,
+   * tabs take turns, and other tabs are told the result.
    *
-   * An explicit provider wins, since `document.cookie` does not exist inside a
-   * Web Worker or on the server — that is exactly when `getCsrfToken` is needed.
-   */
-  private readCsrfToken(): string | undefined {
-    if (this.csrfProvider) {
-      try {
-        return this.csrfProvider();
-      } catch {
-        return undefined;
-      }
-    }
-    if (!this.xsrfCookieName || typeof document === "undefined") return undefined;
-    return readCookie(this.xsrfCookieName);
-  }
-
-  /**
-   * Refreshes the access token.
-   * Concurrent callers share one network call; other tabs are told the result.
-   *
-   * Returns `true` on success, `false` on failure. Only a **server
-   * rejection** ends the session; a network failure leaves it intact — a
-   * subway tunnel is not a logout.
+   * Returns `true` on success, `false` on failure. Only a server rejection
+   * ends the session; a network failure leaves it intact.
    */
   async refresh(): Promise<boolean> {
-    return this.auth.coalesceRefresh(async () => {
-      // Let whichever tab claimed leadership drive; others still await their
-      // own call, which is harmless and keeps them correct if the leader dies.
-      this.tabs.claimLeadership();
-
-      const url = joinUrl(this.opts.baseUrl, this.opts.refreshUrl);
-      const body = this.buildRefreshBody(this.auth.refreshToken);
-
-      // Header mode with no refresh token cannot possibly succeed.
-      if (this.opts.authMode === "header" && !this.auth.refreshToken) {
-        this.failAuth();
-        return false;
-      }
-
-      let response: Response;
-      try {
-        response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...this.defaultHeaders },
-          credentials: this.opts.credentials,
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-      } catch {
-        /*
-         * The network failed — offline, DNS, a dropped connection, a timeout.
-         * That says nothing about the session: the stored tokens may be
-         * perfectly valid, so clearing them here would log the user out of
-         * every tab on a network blip. Report the failure to the caller and
-         * leave auth alone; the request that hit the 401 surfaces as 401.
-         */
-        return false;
-      }
-
-      // The server answered. Only an authentication rejection — 401/403 from
-      // the refresh endpoint — is the server's verdict that the session is
-      // dead, so that is the only case that tears auth down everywhere.
-      // Anything else (a 5xx, a rate-limit 429, a 400 from a bad request) is
-      // a server-side problem that says nothing about the session, so leave
-      // it intact exactly like a network failure.
-      if (response.status === 401 || response.status === 403) {
-        this.failAuth();
-        return false;
-      }
-      if (!response.ok) return false;
-
-      const payload = await response.json().catch(() => undefined);
-      const tokens = this.extractTokens(payload);
-
-      if (tokens?.accessToken || tokens?.refreshToken) {
-        this.auth.apply(tokens);
-      } else if (this.opts.authMode === "cookie") {
-        // Server rotated httpOnly cookies and returned no body.
-        this.auth.apply({ expiresAt: undefined });
-        this.auth.markSession(true);
-      } else {
-        this.failAuth();
-        return false;
-      }
-
-      this.tabs.post({ type: "refreshed", tabId: this.tabs.tabId, expiresAt: this.auth.expiresAt });
-      return true;
-    });
+    return this.auth.coalesceRefresh(() =>
+      runRefresh({
+        auth: this.auth,
+        tabs: this.tabs,
+        url: joinUrl(this.opts.baseUrl, this.opts.refreshUrl),
+        authMode: this.opts.authMode,
+        credentials: this.opts.credentials,
+        timeout: this.opts.timeout,
+        defaultHeaders: this.defaultHeaders,
+        sharedSession: this.sharedSession,
+        extractTokens: this.extractTokens,
+        buildRefreshBody: this.buildRefreshBody,
+        readCsrf: this.readCsrf,
+        csrfHeaderName: this.xsrfHeaderName,
+        siblingRefreshedAt: () => this.siblingRefreshedAt,
+        reject: () => this.failAuth(),
+      }),
+    );
   }
 
   private failAuth(): void {
+    // A tab that never had a session, or doesn't share it, must not log the others out.
+    const broadcast = this.sharedSession && this.auth.hasCredentials;
     this.auth.clear();
-    this.tabs.post({ type: "logout", tabId: this.tabs.tabId });
+    if (broadcast) this.tabs.post({ type: "logout", tabId: this.tabs.tabId });
     this.hooks.onAuthFailure?.();
   }
 
   // ── requests ───────────────────────────────────────────
 
-  private async send<R>(
+  /** The request pipeline behind every verb; also the worker host's in-page fallback. */
+  async send<R>(
     method: HttpMethod,
     url: string,
     body?: unknown,
@@ -313,7 +259,9 @@ export class CoreClient {
      * `markSession(true)` themselves.
      */
     if (this.opts.authMode === "cookie" && !config?.skipAuth) {
-      if (result.statusCode === 401 || result.statusCode === 403) {
+      // With the refresh flow on, a rejected refresh already ended the session and
+      // a network blip must not; 403 means "not allowed", not "not signed in".
+      if (result.statusCode === 401 && config?.refreshTokenCheck === false) {
         this.auth.markSession(false);
       }
     }
@@ -378,7 +326,7 @@ export class CoreClient {
 
     if (result.status) {
       const tokens = this.extractTokens(result.data);
-      if (tokens) this.auth.apply(tokens);
+      if (tokens || this.opts.authMode === "cookie") this.auth.replace(tokens ?? {});
       /*
        * In cookie mode the tokens are httpOnly: the body carries no access
        * token and `document.cookie` cannot see one either. A 2xx from the
@@ -397,6 +345,7 @@ export class CoreClient {
       if (!config?.fullData) {
         const envelope = result.data as Record<string, unknown> | undefined;
         if (envelope && typeof envelope === "object" && envelope.data !== undefined) {
+          result.body = envelope;
           result.data = envelope.data as R;
         }
       }
@@ -428,7 +377,7 @@ export class CoreClient {
 
   async setTokens(tokens: TokenPair): Promise<void> {
     await this.hydrated;
-    this.auth.apply(tokens);
+    this.auth.seed(tokens);
     // Await durability: callers seed tokens then often navigate immediately.
     await this.auth.flush();
     this.tabs.post({ type: "login", tabId: this.tabs.tabId, expiresAt: this.auth.expiresAt });
