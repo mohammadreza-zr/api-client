@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.0.0 - 2026-09-28
 
 A security and correctness pass. Every fix below has a regression test in
 `verify/regressions.mjs` or `verify/regressions-worker.mjs` that fails on
