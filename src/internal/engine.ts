@@ -9,10 +9,10 @@ import {
   isSingleUseBody,
   parseBody,
 } from "./body";
-import { cancelMessage, linkSignals, reasonOf } from "./cancel";
+import { linkSignals } from "./cancel";
 import { assertFetchable } from "./env";
 import { isTrustedUrl } from "./origin";
-import { emptyResult, errorMessage } from "./result";
+import { applyTransforms, emptyResult, errorMessage, markCanceled } from "./result";
 import { buildUrl } from "./url";
 
 /** Everything the engine needs from its host (main thread or worker). */
@@ -213,30 +213,18 @@ async function sendAttempt(
   }
 }
 
-/** Unwraps `{ data }` and runs the caller's transforms — on success only. */
+/** Unwraps `{ data }`, keeps the envelope on `body`, and runs the caller's transforms. */
 function applyPayload(result: IRes<unknown>, parsed: unknown, config: RequestConfig<unknown>): void {
   const envelope = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
   result.message = typeof envelope.message === "string" ? envelope.message : "";
   result.errors = (envelope.errors as Record<string, string[]>) ?? undefined;
 
-  let data: unknown = parsed;
+  result.data = parsed;
   if (!config.fullData && envelope.data !== undefined) {
-    data = envelope.data;
+    result.data = envelope.data;
     result.body = parsed;
   }
-  result.data = data;
-  // Transforms are written for the success shape; running them on an error body would crash and hide the status.
-  if (!result.status) return;
-
-  try {
-    if (config.beforeSelectOptions) data = config.beforeSelectOptions(data as never);
-    if (config.afterFunc) data = config.afterFunc(data as never);
-    result.data = data;
-  } catch (error) {
-    result.status = false;
-    result.error = error;
-    result.message = errorMessage(error, "Response transform failed");
-  }
+  applyTransforms(result, config);
 }
 
 /**
@@ -355,11 +343,7 @@ function applyFailure(result: IRes<unknown>, error: unknown): void {
     return;
   }
   if (err?.name === "AbortError") {
-    // A cancel is something the app asked for, so it is flagged and carries the reason.
-    result.canceled = true;
-    result.message = cancelMessage(error);
-    const reason = reasonOf(error);
-    if (reason) result.cancelReason = reason;
+    markCanceled(result, error);
     return;
   }
 

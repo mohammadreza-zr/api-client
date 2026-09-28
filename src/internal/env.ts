@@ -1,5 +1,7 @@
 /** Runtime capability detection. No bundler-specific globals leak out of here. */
 
+import { hasScheme } from "./url";
+
 /**
  * True inside a Web Worker (dedicated or shared).
  *
@@ -190,14 +192,12 @@ export function resolveBaseUrl(explicit?: string): string {
   return base.replace(/\/+$/, "");
 }
 
-const HAS_SCHEME = /^[a-z][a-z\d+\-.]*:/i;
-
 /**
  * Fails fast, and helpfully, on a URL that cannot be fetched: a relative path
  * where there is no page to resolve it against (Node, SSR, tests).
  */
 export function assertFetchable(url: string): void {
-  if (HAS_SCHEME.test(url) || typeof location !== "undefined") return;
+  if (hasScheme(url) || typeof location !== "undefined") return;
   throw new Error(
     `No base URL for "${url}". Pass createClient({ baseUrl: "https://api.example.com" }) ` +
       `or set one of ${BASE_URL_KEYS.join(", ")}.`,

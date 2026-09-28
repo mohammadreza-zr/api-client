@@ -8,22 +8,12 @@ import type {
   RequestConfig,
   TokenPair,
 } from "../types";
-import {
-  CancelRegistry,
-  cancelMessage,
-  groupsOf,
-  isCancelable,
-  linkSignals,
-  previewUrl,
-  reasonOf,
-  resolveCancelDefaults,
-  type CancelDefaults,
-  type Tracked,
-} from "../internal/cancel";
+import { linkSignals } from "../internal/cancel";
 import { CoreClient } from "../internal/core-client";
 import { resolveBaseUrl } from "../internal/env";
-import { errorMessage, failedResult } from "../internal/result";
+import { applyTransforms, errorMessage, failedResult, markCanceled } from "../internal/result";
 import { storageFor } from "../internal/storage";
+import { RequestTracker } from "../internal/tracker";
 import { splitConfig } from "./host-options";
 import { WorkerChannel } from "./worker-channel";
 
@@ -40,13 +30,12 @@ export class WorkerHost {
   private inline: CoreClient | null = null;
   private listeners = new Set<(state: AuthState) => void>();
   /** Host-side so `api.cancel()` stays synchronous and works before the worker boots. */
-  private cancelDefaults: CancelDefaults;
-  private registry = new CancelRegistry();
+  private tracker: RequestTracker;
   private baseUrl: string;
 
   constructor(private options: ClientOptions) {
-    this.cancelDefaults = resolveCancelDefaults(options.cancel);
     this.baseUrl = resolveBaseUrl(options.baseUrl);
+    this.tracker = new RequestTracker(options.cancel, this.baseUrl);
     this.channel = new WorkerChannel(options, this.baseUrl, {
       authChanged: (state) => this.emitAuth(state),
       bootFailed: () => {
@@ -80,19 +69,8 @@ export class WorkerHost {
 
   // ── requests ───────────────────────────────────────────
 
-  private track(method: HttpMethod, url: string, config?: RequestConfig<unknown>): Tracked | undefined {
-    if (!isCancelable(method, config, this.cancelDefaults)) return undefined;
-    return this.registry.track({
-      method,
-      url: previewUrl(url, this.baseUrl, config),
-      key: config?.cancelKey,
-      groups: groupsOf(config),
-      takeLatest: config?.takeLatest ?? this.cancelDefaults.takeLatest,
-    });
-  }
-
   private async request<R>(method: HttpMethod, url: string, body?: unknown, config?: RequestConfig<R>): Promise<IRes<R>> {
-    const tracked = this.track(method, url, config as RequestConfig<unknown> | undefined);
+    const tracked = this.tracker.track(method, url, config as RequestConfig<unknown> | undefined);
     const { signal, release } = linkSignals([config?.signal, tracked?.signal]);
     const linked = config?.signal || tracked ? signal : undefined;
 
@@ -115,7 +93,7 @@ export class WorkerHost {
     config: RequestConfig<R> | undefined,
     signal: AbortSignal | undefined,
   ): Promise<IRes<R>> {
-    const { serializable, beforeFunc, afterFunc, beforeSelectOptions } = splitConfig(config);
+    const { serializable, beforeFunc } = splitConfig(config);
     let result: IRes<R>;
     try {
       const payload = beforeFunc ? beforeFunc(body) : body;
@@ -131,13 +109,8 @@ export class WorkerHost {
           (id) => ({ kind: "request", id, method, url, body: payload, config: serializable }),
           signal,
         );
-        // Re-apply the transforms the structured-clone boundary could not carry.
-        if (result.status) {
-          let data: unknown = result.data;
-          if (beforeSelectOptions) data = beforeSelectOptions(data as never);
-          if (afterFunc) data = afterFunc(data as never);
-          result.data = data as R;
-        }
+        // The transforms are functions: they couldn't cross the boundary, so they run here.
+        applyTransforms(result as IRes<unknown>, (config ?? {}) as RequestConfig<unknown>);
       }
     } catch (error) {
       result = toFailure<R>(error);
@@ -151,15 +124,15 @@ export class WorkerHost {
   // ── cancellation ───────────────────────────────────────
 
   cancel(selector?: CancelSelector, reason?: string): number {
-    return this.registry.cancel(selector, reason);
+    return this.tracker.cancel(selector, reason);
   }
 
   pending(selector?: CancelSelector): PendingRequest[] {
-    return this.registry.pending(selector);
+    return this.tracker.pending(selector);
   }
 
   shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean {
-    return config?.throwOnCancel ?? this.cancelDefaults.throwOnCancel;
+    return this.tracker.shouldThrowOnCancel(config);
   }
 
   get<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>> {
@@ -250,7 +223,7 @@ export class WorkerHost {
   }
 
   destroy(): void {
-    this.registry.cancel(undefined, "client destroyed");
+    this.tracker.cancel(undefined, "client destroyed");
     this.channel.destroy();
     this.inline?.destroy();
     this.listeners.clear();
@@ -259,12 +232,7 @@ export class WorkerHost {
 
 /** A thrown RPC error as a result: an abort becomes a cancellation, anything else a client-side failure. */
 function toFailure<R>(error: unknown): IRes<R> {
-  if ((error as Error | undefined)?.name !== "AbortError") {
-    return failedResult(errorMessage(error, "Worker request failed"), error);
-  }
-  const result = failedResult<R>(cancelMessage(error), error);
-  result.canceled = true;
-  const reason = reasonOf(error);
-  if (reason) result.cancelReason = reason;
+  const result = failedResult<R>(errorMessage(error, "Worker request failed"), error);
+  if ((error as Error | undefined)?.name === "AbortError") markCanceled(result as IRes<unknown>, error);
   return result;
 }

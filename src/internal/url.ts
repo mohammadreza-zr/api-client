@@ -9,6 +9,12 @@
  */
 
 const ABSOLUTE_URL = /^[a-z][a-z\d+\-.]*:\/\//i;
+const HAS_SCHEME = /^[a-z][a-z\d+\-.]*:/i;
+
+/** Whether `url` names its own scheme (`https:`, `blob:`, `data:` …), rather than being a path. */
+export function hasScheme(url: string): boolean {
+  return HAS_SCHEME.test(url);
+}
 
 /** `"wallet.balance"` → `"wallet[balance]"` */
 export function replaceDotToBracket(name: string): string {

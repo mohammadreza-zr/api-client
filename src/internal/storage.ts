@@ -73,6 +73,8 @@ const COOKIE_CHUNK_SIZE = 3800;
 /** Tokens are ASCII, which `encodeURIComponent` at most triples. */
 const JSON_CHUNK_SIZE = 1200;
 const CHUNKED_PREFIX = "chunks:";
+/** Far above any real token pair; a planted `chunks:999999999` must not freeze the tab. */
+const MAX_COOKIE_CHUNKS = 16;
 
 /**
  * Non-httpOnly cookie storage, for when tokens must survive a reload and be
@@ -92,8 +94,10 @@ export class CookieStorage implements TokenStorage {
     if (!head) return null;
     let raw = head;
     if (head.startsWith(CHUNKED_PREFIX)) {
+      const count = this.chunkCount();
+      if (count === 0) return null;
       const parts: string[] = [];
-      for (let i = 0; i < Number(head.slice(CHUNKED_PREFIX.length)); i++) {
+      for (let i = 0; i < count; i++) {
         const part = readCookie(`${this.key}.${i}`);
         if (part === undefined) return null;
         parts.push(part);
@@ -121,6 +125,7 @@ export class CookieStorage implements TokenStorage {
     }
     // Slice before encoding, so no `%XX` escape is split across two cookies.
     const count = Math.ceil(json.length / JSON_CHUNK_SIZE);
+    if (count > MAX_COOKIE_CHUNKS) return;
     for (let i = 0; i < count; i++) {
       const part = json.slice(i * JSON_CHUNK_SIZE, (i + 1) * JSON_CHUNK_SIZE);
       this.write(`${this.key}.${i}`, encodeURIComponent(part), expires);
@@ -137,7 +142,8 @@ export class CookieStorage implements TokenStorage {
 
   private chunkCount(): number {
     const head = readCookie(this.key);
-    return head?.startsWith(CHUNKED_PREFIX) ? Number(head.slice(CHUNKED_PREFIX.length)) || 0 : 0;
+    const count = head?.startsWith(CHUNKED_PREFIX) ? Number(head.slice(CHUNKED_PREFIX.length)) : 0;
+    return Number.isInteger(count) && count > 0 && count <= MAX_COOKIE_CHUNKS ? count : 0;
   }
 
   private removeChunks(from: number, to: number): void {

@@ -62,7 +62,9 @@ async function refresh(req, res) {
     state.liveRefresh.add(next);
     return json(res, 200, { access: jwt(600), refresh: next });
   }
-  return json(res, 200, { access: jwt(600), refresh: "refresh-next" });
+  // `token` too, like servers that name it so: a leak via getSocketToken(refreshUrl) would show here.
+  const access = jwt(600);
+  return json(res, 200, { access, refresh: "refresh-next", token: access });
 }
 
 export function start(port) {
@@ -97,6 +99,7 @@ export function start(port) {
       }
       return json(res, 200, { data: { ok: true } });
     }
+    if (path === "/echo-auth") return json(res, 200, { data: { seen: req.headers.authorization?.slice(7) ?? null } });
     if (path === "/page") return json(res, 200, { data: [1, 2], meta: { total: 500 } });
     if (path === "/file") {
       res.writeHead(200, { "Content-Type": "application/octet-stream" });

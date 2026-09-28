@@ -4,20 +4,10 @@
  */
 import "./worker-harness.mjs";
 import { jwt, start, state } from "./regressions-server.mjs";
+import { createChecker, rejection } from "./check.mjs";
 
 const BASE = "http://localhost:4624";
-let pass = 0,
-  fail = 0;
-const check = (name, cond, detail = "") => {
-  if (cond) {
-    pass++;
-    console.log(`  ✓ ${name}`);
-  } else {
-    fail++;
-    console.log(`  ✗ ${name} ${detail}`);
-  }
-};
-const rejection = (promise) => promise.then(() => undefined, (error) => error);
+const { check, finish } = createChecker();
 
 const server = await start(4624);
 const { createClient, ApiError } = await import("../dist/index.js");
@@ -66,6 +56,5 @@ try {
   }
 } finally {
   server.close();
-  console.log(`\n${pass} passed, ${fail} failed`);
-  process.exit(fail ? 1 : 0);
+  finish();
 }

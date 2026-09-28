@@ -12,20 +12,14 @@ import type {
 } from "../types";
 import { AuthStore } from "./auth-store";
 import { TabSync } from "./broadcast";
-import {
-  CancelRegistry,
-  groupsOf,
-  isCancelable,
-  previewUrl,
-  resolveCancelDefaults,
-  type CancelDefaults,
-} from "./cancel";
+import { previewUrl, toPath } from "./cancel";
 import { createCsrfReader, type CsrfReader } from "./cookie";
 import { executeRequest, type EngineContext } from "./engine";
 import { extractUser, normalizeExtractor, normalizeRefreshBody } from "./extract";
 import { trustedOrigins } from "./origin";
 import { runRefresh } from "./refresh";
 import { sharesSession } from "./storage";
+import { RequestTracker } from "./tracker";
 import { joinUrl } from "./url";
 
 /**
@@ -55,8 +49,7 @@ export class CoreClient {
   private hooks: Pick<ClientOptions, "onAuthStateChanged" | "onAuthFailure" | "onError" | "onLog">;
   private hydrated: Promise<void>;
   private disposed = false;
-  private cancelDefaults: CancelDefaults;
-  private registry = new CancelRegistry();
+  private tracker: RequestTracker;
 
   /**
    * `storage` is the adapter tokens persist through (`storageFor` on the main
@@ -81,7 +74,7 @@ export class CoreClient {
     };
 
     this.defaultHeaders = { ...options.headers };
-    this.cancelDefaults = resolveCancelDefaults(options.cancel);
+    this.tracker = new RequestTracker(options.cancel, this.opts.baseUrl);
     this.xsrfHeaderName = options.xsrfHeaderName ?? "X-CSRF-Token";
     this.readCsrf = createCsrfReader(options);
     this.trusted = trustedOrigins(this.opts.baseUrl, options.authOrigins);
@@ -208,21 +201,8 @@ export class CoreClient {
     await this.hydrated;
 
     const request = config as RequestConfig<unknown> | undefined;
-
-    /*
-     * Register the request only when it is actually cancelable, so a client
-     * that never opts in pays nothing — no map entry, no AbortController, no
-     * URL pre-build.
-     */
-    const tracked = isCancelable(method, request, this.cancelDefaults)
-      ? this.registry.track({
-          method,
-          url: previewUrl(url, config?.baseUrl ?? this.opts.baseUrl, request),
-          key: request?.cancelKey,
-          groups: groupsOf(request),
-          takeLatest: request?.takeLatest ?? this.cancelDefaults.takeLatest,
-        })
-      : undefined;
+    // Tracked only when cancelable: a client that never opts in pays nothing.
+    const tracked = this.tracker.track(method, url, request);
 
     let result: IRes<R>;
     try {
@@ -275,17 +255,17 @@ export class CoreClient {
 
   /** Cancels matching in-flight requests. Returns how many were stopped. */
   cancel(selector?: CancelSelector, reason?: string): number {
-    return this.registry.cancel(selector, reason);
+    return this.tracker.cancel(selector, reason);
   }
 
   /** The cancelable requests currently in flight. */
   pending(selector?: CancelSelector): PendingRequest[] {
-    return this.registry.pending(selector);
+    return this.tracker.pending(selector);
   }
 
   /** Whether a canceled request should reject. Independent of `throwError`. */
   shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean {
-    return config?.throwOnCancel ?? this.cancelDefaults.throwOnCancel;
+    return this.tracker.shouldThrowOnCancel(config);
   }
 
   get<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>> {
@@ -441,6 +421,17 @@ export class CoreClient {
     return this.auth.isExpired() ? undefined : this.auth.accessToken;
   }
 
+  /** For the worker boundary: the session's tokens, which must never cross to the page. */
+  liveTokens(): Set<string> {
+    return new Set([this.auth.accessToken, this.auth.refreshToken].filter((t): t is string => Boolean(t)));
+  }
+
+  /** For the worker boundary: whether `url` is the login or refresh endpoint, which mint tokens. */
+  isAuthEndpoint(url: string, config?: RequestConfig<unknown>): boolean {
+    const path = toPath(previewUrl(url, this.opts.baseUrl, config));
+    return [this.opts.loginUrl, this.opts.refreshUrl].some((u) => toPath(joinUrl(this.opts.baseUrl, u)) === path);
+  }
+
   async getAuthState(): Promise<AuthState> {
     await this.hydrated;
     return this.auth.state;
@@ -452,7 +443,7 @@ export class CoreClient {
 
   destroy(): void {
     this.disposed = true;
-    this.registry.cancel(undefined, "client destroyed");
+    this.tracker.cancel(undefined, "client destroyed");
     this.tabs.destroy();
   }
 }

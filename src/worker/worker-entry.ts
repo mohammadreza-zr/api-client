@@ -2,9 +2,9 @@
 
 import { CoreClient } from "../internal/core-client";
 import { CancelError } from "../internal/cancel";
-import { stripTokenFields } from "../internal/extract";
-import type { HostMessage, WorkerMessage } from "./protocol";
-import type { LogEntry, RequestConfig, TokenFieldMap, TokenPair, TokenStorage } from "../types";
+import { redactTokens, tokenFieldNames } from "../internal/extract";
+import type { HostMessage, SerializableOptions, WorkerMessage } from "./protocol";
+import type { IRes, LogEntry, RequestConfig, TokenFieldMap, TokenPair, TokenStorage } from "../types";
 
 /**
  * Worker-side host.
@@ -82,145 +82,127 @@ class HostStorage implements TokenStorage {
   }
 }
 
+/** Messages that need an initialized client. */
+type ClientMessage = Extract<
+  HostMessage,
+  { kind: "request" | "login" | "logout" | "setTokens" | "restoreSession" | "authState" | "refresh" | "accessToken" }
+>;
+
+const CLIENT_KINDS = new Set<HostMessage["kind"]>([
+  "request",
+  "login",
+  "logout",
+  "setTokens",
+  "restoreSession",
+  "authState",
+  "refresh",
+  "accessToken",
+] satisfies ClientMessage["kind"][]);
+
+const needsClient = (msg: HostMessage): msg is ClientMessage => CLIENT_KINDS.has(msg.kind);
+
+/**
+ * Nothing that crosses to the page may carry a token — worker mode's whole
+ * promise. The session's live tokens are removed wherever a response echoes
+ * them, and a call to the login or refresh endpoint also loses its token
+ * fields: `api.post("/auth/refresh")` would otherwise mint a token for page code.
+ */
+function redact(active: CoreClient, result: IRes<unknown>, mintsTokens: boolean): void {
+  const fields = mintsTokens ? tokenFieldNames(extractMapping) : new Set<string>();
+  const tokens = active.liveTokens();
+  result.data = redactTokens(result.data, fields, tokens);
+  result.body = redactTokens(result.body, fields, tokens);
+}
+
+async function serve(active: CoreClient, msg: ClientMessage): Promise<void> {
+  switch (msg.kind) {
+    case "request": {
+      const controller = new AbortController();
+      aborters.set(msg.id, controller);
+      const config = { ...msg.config, signal: controller.signal } as RequestConfig<unknown>;
+      try {
+        const result = await active.send(msg.method, msg.url, msg.body, config);
+        redact(active, result, active.isAuthEndpoint(msg.url, config));
+        send({ kind: "result", id: msg.id, result });
+      } finally {
+        aborters.delete(msg.id);
+      }
+      return;
+    }
+    case "login": {
+      const result = await active.login(msg.body, msg.config as RequestConfig<unknown>);
+      // The extractor already captured the tokens; the page gets the rest of the response.
+      redact(active, result, true);
+      return send({ kind: "result", id: msg.id, result });
+    }
+    case "logout":
+      return send({ kind: "result", id: msg.id, result: await active.logout(msg.config as RequestConfig<unknown>) });
+    case "setTokens":
+      await active.setTokens(msg.tokens);
+      return send({ kind: "void", id: msg.id });
+    case "restoreSession":
+      return send({ kind: "authState", id: msg.id, state: await active.restoreSession(msg.url) });
+    case "authState":
+      return send({ kind: "authState", id: msg.id, state: await active.getAuthState() });
+    case "refresh":
+      return send({ kind: "refreshed", id: msg.id, ok: await active.refresh() });
+    case "accessToken":
+      // CoreClient refuses unless the client was created with `exposeTokens: true`.
+      return send({ kind: "accessToken", id: msg.id, token: await active.getAccessToken() });
+  }
+}
+
+function init(options: SerializableOptions): void {
+  extractMapping = options.extractTokens;
+  // Persistent kinds are proxied to the host; memory stays local.
+  const storage = (options.storage ?? "memory") === "memory" ? undefined : new HostStorage();
+  const getCsrfToken = options.csrf
+    ? () => askHost<string | undefined>((id) => ({ kind: "csrf", id }), undefined)
+    : undefined;
+
+  client = new CoreClient(
+    {
+      ...options,
+      getCsrfToken,
+      onAuthStateChanged: (state) => send({ kind: "authChanged", state }),
+      onAuthFailure: () => send({ kind: "authFailure" }),
+      onLog: (entry: LogEntry) => send({ kind: "log", entry }),
+    },
+    storage,
+  );
+  send({ kind: "ready" });
+}
+
 self.onmessage = async (event: MessageEvent<HostMessage>) => {
   const msg = event.data;
   if (!msg) return;
 
   try {
+    if (needsClient(msg)) {
+      if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
+      return await serve(client, msg);
+    }
     switch (msg.kind) {
-      case "init": {
-        extractMapping = msg.options.extractTokens;
-        // Persistent kinds are proxied to the host; memory stays local.
-        const kind = msg.options.storage ?? "memory";
-        const storage = kind === "memory" ? undefined : new HostStorage();
-        const getCsrfToken = msg.options.csrf
-          ? () => askHost<string | undefined>((id) => ({ kind: "csrf", id }), undefined)
-          : undefined;
-
-        client = new CoreClient(
-          {
-            ...msg.options,
-            getCsrfToken,
-            onAuthStateChanged: (state) => send({ kind: "authChanged", state }),
-            onAuthFailure: () => send({ kind: "authFailure" }),
-            onLog: (entry: LogEntry) => send({ kind: "log", entry }),
-          },
-          storage,
-        );
-        send({ kind: "ready" });
-        break;
-      }
-
-      case "request": {
-        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
-
-        const controller = new AbortController();
-        aborters.set(msg.id, controller);
-
-        const config = { ...(msg.config ?? {}), signal: controller.signal } as RequestConfig<unknown>;
-
-        try {
-          const result = await client[
-            msg.method.toLowerCase() as "get" | "post" | "put" | "patch" | "delete"
-          ](msg.url as never, ...(bodyArgs(msg.method, msg.body, config) as never[]));
-          send({ kind: "result", id: msg.id, result: result as never });
-        } finally {
-          aborters.delete(msg.id);
-        }
-        break;
-      }
-
+      case "init":
+        return init(msg.options);
       case "storageResult":
-        answerHost(msg.id, msg.tokens);
-        break;
-
+        return answerHost(msg.id, msg.tokens);
       case "csrfResult":
-        answerHost(msg.id, msg.token);
-        break;
-
-      case "abort": {
-        // Abort with a CancelError so the engine reports it as a cancellation
-        // — flagged, with the reason — rather than a bare abort.
+        return answerHost(msg.id, msg.token);
+      case "abort":
+        // A CancelError, so the engine reports a flagged cancellation with its reason.
         aborters.get(msg.id)?.abort(new CancelError(msg.reason));
         aborters.delete(msg.id);
-        break;
-      }
-
-      case "login": {
-        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
-        const result = await client.login(msg.body, msg.config as RequestConfig<unknown>);
-        /*
-         * The login response usually contains the tokens themselves, and the
-         * whole point of worker mode is that tokens never reach the main
-         * thread — not even as a side effect of `api.login()` resolving.
-         * Strip them before the result crosses the boundary; the extractor
-         * has already captured them into the worker's closure. The mapping is
-         * passed along so custom key names are stripped too.
-         */
-        result.data = stripTokenFields(result.data, extractMapping);
-        result.body = stripTokenFields(result.body, extractMapping);
-        send({ kind: "result", id: msg.id, result });
-        break;
-      }
-
-      case "logout": {
-        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
-        const result = await client.logout(msg.config as RequestConfig<unknown>);
-        send({ kind: "result", id: msg.id, result });
-        break;
-      }
-
-      case "setTokens": {
-        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
-        await client.setTokens(msg.tokens);
-        send({ kind: "void", id: msg.id });
-        break;
-      }
-
-      case "restoreSession": {
-        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
-        send({ kind: "authState", id: msg.id, state: await client.restoreSession(msg.url) });
-        break;
-      }
-
-      case "authState": {
-        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
-        send({ kind: "authState", id: msg.id, state: await client.getAuthState() });
-        break;
-      }
-
-      case "refresh": {
-        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
-        send({ kind: "refreshed", id: msg.id, ok: await client.refresh() });
-        break;
-      }
-
-      case "accessToken": {
-        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
-        send({ kind: "accessToken", id: msg.id, token: await client.getAccessToken() });
-        break;
-      }
-
-      case "destroy": {
+        return;
+      case "destroy":
         client?.destroy();
         client = null;
-        for (const controller of aborters.values()) {
-          controller.abort(new CancelError("client destroyed"));
-        }
+        for (const controller of aborters.values()) controller.abort(new CancelError("client destroyed"));
         aborters.clear();
-        self.close();
-        break;
-      }
+        return self.close();
     }
   } catch (error) {
     const message = (error as Error)?.message ?? "Worker error";
-    if ("id" in msg && typeof msg.id === "number") {
-      send({ kind: "failure", id: msg.id, message });
-    }
+    if ("id" in msg && typeof msg.id === "number") send({ kind: "failure", id: msg.id, message });
   }
 };
-
-/** GET and DELETE take `(url, config)`; the others take `(url, body, config)`. */
-function bodyArgs(method: string, body: unknown, config: RequestConfig<unknown>): unknown[] {
-  return method === "GET" || method === "DELETE" ? [config] : [body, config];
-}

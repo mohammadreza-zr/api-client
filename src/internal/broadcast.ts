@@ -7,7 +7,7 @@ export type TabMessage =
   | { type: "login"; tabId: string; expiresAt: number | null };
 
 interface LockManagerLike {
-  request<T>(name: string, task: () => Promise<T>): Promise<T>;
+  request<T>(name: string, options: { signal: AbortSignal }, task: () => Promise<T>): Promise<T>;
 }
 
 /**
@@ -70,11 +70,25 @@ export class TabSync {
    * Runs `task` while holding a lock shared by every tab of this origin
    * (Web Locks API, available in windows and workers). Where the API is
    * missing, or sync is off, the task simply runs.
+   *
+   * Waiting is bounded by `waitMs` (`0` waits indefinitely): a tab frozen
+   * while holding the lock, or a script that never releases it, must not
+   * stall every other tab. Giving up rejects with an `AbortError`.
    */
-  exclusive<T>(task: () => Promise<T>): Promise<T> {
+  async exclusive<T>(task: () => Promise<T>, waitMs: number): Promise<T> {
     const locks = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator?.locks;
     if (!this.channel || typeof locks?.request !== "function") return task();
-    return locks.request(this.lockName, task);
+
+    const giveUp = new AbortController();
+    const timer = waitMs > 0 ? setTimeout(() => giveUp.abort(), waitMs) : undefined;
+    try {
+      return await locks.request(this.lockName, { signal: giveUp.signal }, () => {
+        clearTimeout(timer);
+        return task();
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   destroy(): void {

@@ -98,7 +98,7 @@ export function runRefresh(ctx: RefreshContext): Promise<boolean> {
   const startedWith = ctx.auth.refreshToken;
   const queuedAt = Date.now();
 
-  return ctx.tabs.exclusive(async () => {
+  const turn = ctx.tabs.exclusive(async () => {
     if (ctx.auth.generation !== generation) return false;
     if (await adoptSiblingRefresh(ctx, startedWith, queuedAt)) return true;
 
@@ -115,5 +115,11 @@ export function runRefresh(ctx: RefreshContext): Promise<boolean> {
     await ctx.auth.flush();
     ctx.tabs.post({ type: "refreshed", tabId: ctx.tabs.tabId, expiresAt: ctx.auth.expiresAt });
     return true;
+  }, ctx.timeout);
+
+  // Never got the lock in time: a failed refresh, which keeps the session.
+  return turn.catch((error: unknown) => {
+    if ((error as { name?: string } | undefined)?.name === "AbortError") return false;
+    throw error;
   });
 }

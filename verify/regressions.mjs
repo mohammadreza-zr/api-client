@@ -2,25 +2,31 @@
  * Regression suite for the security and correctness audit, main-thread mode.
  * Every case reproduces the original bug against a real HTTP server.
  */
-import { createClient } from "../dist/index.js";
+import { CookieStorage, createClient } from "../dist/index.js";
 import { FILE_BYTES, jwt, seenAt, start, state } from "./regressions-server.mjs";
+import { createChecker, within } from "./check.mjs";
 
 const BASE = "http://localhost:4620";
 const FOREIGN = "http://127.0.0.1:4621";
-let pass = 0,
-  fail = 0;
-const check = (name, cond, detail = "") => {
-  if (cond) {
-    pass++;
-    console.log(`  ✓ ${name}`);
-  } else {
-    fail++;
-    console.log(`  ✗ ${name} ${detail}`);
-  }
-};
+const { check, finish } = createChecker();
 const client = (options = {}) =>
   createClient({ baseUrl: BASE, worker: false, throwError: false, multiTab: false, ...options });
-const within = (promise, ms) => Promise.race([promise, new Promise((r) => setTimeout(() => r("TIMED OUT"), ms))]);
+
+/** A document.cookie that keeps a jar and honours expiry, like a browser's. */
+function cookieJar() {
+  const jar = new Map();
+  return {
+    get cookie() {
+      return [...jar].map(([name, value]) => `${name}=${value}`).join("; ");
+    },
+    set cookie(line) {
+      const [pair, ...attributes] = line.split("; ");
+      const name = pair.slice(0, pair.indexOf("="));
+      if (attributes.some((a) => a === "Expires=Thu, 01 Jan 1970 00:00:00 GMT")) jar.delete(name);
+      else jar.set(name, pair.slice(pair.indexOf("=") + 1));
+    },
+  };
+}
 
 const servers = [await start(4620), await start(4621)];
 
@@ -129,6 +135,28 @@ try {
   check("DELETE without body sends no Content-Type", seenAt("/ct-delete")[0]?.ct === null);
   check("JSON body still sends application/json", seenAt("/ct-post")[0]?.ct === "application/json");
 
+  console.log("\nhardening of the new features");
+  const stuck = client({ getCsrfToken: () => new Promise(() => {}) });
+  const unblocked = await within(stuck.post("/csrf-stuck", {}), 8000);
+  check("a CSRF provider that never settles cannot block writes", unblocked?.status === true);
+
+  globalThis.document = cookieJar();
+  const big = { accessToken: "a".repeat(6000), refreshToken: "r".repeat(2000), expiresAt: 1 };
+  const jarStorage = new CookieStorage("big.tokens");
+  jarStorage.set(big);
+  check("CookieStorage round-trips a pair over the cookie size limit", JSON.stringify(jarStorage.get()) === JSON.stringify(big));
+  jarStorage.clear();
+  check("clear() removes every chunk", jarStorage.get() === null && !document.cookie.includes("big.tokens"));
+  document.cookie = "planted.tokens=chunks:999999999";
+  const t1 = Date.now();
+  const plantedStorage = new CookieStorage("planted.tokens");
+  const planted = plantedStorage.get();
+  // set() and clear() walk the previous chunk count: a planted one used to loop ~10⁹ times.
+  plantedStorage.set({ accessToken: "a", refreshToken: "r" });
+  plantedStorage.clear();
+  check("a planted chunk count cannot freeze CookieStorage", planted === null && Date.now() - t1 < 100, `${Date.now() - t1}ms`);
+  delete globalThis.document;
+
   console.log("\ncross-tab");
   globalThis.window = globalThis;
   const tabA = client({ multiTab: true, storageKey: "tabs-memory" });
@@ -151,12 +179,18 @@ try {
     check("concurrent tabs spend a rotating refresh token once", !state.reuseDetected && state.refreshCalls - before === 1);
     check("both tabs end up signed in", one && two, `${one} ${two}`);
     [tab1, tab2].forEach((tab) => tab.destroy());
+
+    // Held forever, as by a frozen tab or a hostile script.
+    void navigator.locks.request("tabs-locked.auth.refresh", () => new Promise(() => {}));
+    const locked = client({ multiTab: true, storageKey: "tabs-locked", timeout: 300 });
+    await locked.setTokens({ accessToken: jwt(600), refreshToken: "r" });
+    check("a refresh lock held forever cannot stall refresh", (await within(locked.refresh(), 3000)) === false);
+    locked.destroy();
   } else {
     console.log("  - skipped: this runtime has no Web Locks API (navigator.locks)");
   }
   [tabA, tabB].forEach((tab) => tab.destroy());
 } finally {
   servers.forEach((server) => server.close());
-  console.log(`\n${pass} passed, ${fail} failed`);
-  process.exit(fail ? 1 : 0);
+  finish();
 }

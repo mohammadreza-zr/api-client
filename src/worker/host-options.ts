@@ -34,15 +34,14 @@ export function toSerializableOptions(options: ClientOptions, baseUrl: string): 
 export function splitConfig<R>(config?: RequestConfig<R>): {
   serializable?: SerializableConfig;
   beforeFunc?: (body: unknown) => unknown;
-  afterFunc?: (data: never) => unknown;
-  beforeSelectOptions?: (data: never) => unknown;
 } {
   if (!config) return {};
 
   const {
     beforeFunc,
-    afterFunc,
-    beforeSelectOptions,
+    // Response transforms are functions; the host applies them to the result.
+    afterFunc: _afterFunc,
+    beforeSelectOptions: _beforeSelectOptions,
     signal: _signal,
     // Cancellation metadata drives the host registry; the worker only needs the `abort` message.
     cancelable: _cancelable,
@@ -56,7 +55,5 @@ export function splitConfig<R>(config?: RequestConfig<R>): {
   return {
     serializable: rest as SerializableConfig,
     beforeFunc,
-    afterFunc: afterFunc as ((data: never) => unknown) | undefined,
-    beforeSelectOptions: beforeSelectOptions as ((data: never) => unknown) | undefined,
   };
 }

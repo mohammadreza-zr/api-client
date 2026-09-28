@@ -5,21 +5,11 @@
  */
 import "./worker-harness.mjs";
 import { FILE_BYTES, jwt, seenAt, start, state } from "./regressions-server.mjs";
+import { createChecker, within } from "./check.mjs";
 
 const BASE = "http://localhost:4622";
 const FOREIGN = "http://127.0.0.1:4623";
-let pass = 0,
-  fail = 0;
-const check = (name, cond, detail = "") => {
-  if (cond) {
-    pass++;
-    console.log(`  ✓ ${name}`);
-  } else {
-    fail++;
-    console.log(`  ✗ ${name} ${detail}`);
-  }
-};
-const within = (promise, ms) => Promise.race([promise, new Promise((r) => setTimeout(() => r("TIMED OUT"), ms))]);
+const { check, finish } = createChecker();
 
 const servers = [await start(4622), await start(4623)];
 const { createClient } = await import("../dist/index.js");
@@ -50,6 +40,8 @@ try {
   check("a throwing beforeFunc resolves like main-thread mode", thrown?.status === false && thrown.statusCode === 0);
   const notFound = await api.get("/missing", { afterFunc: (d) => d.items.map((x) => x) });
   check("afterFunc on a 404 keeps the 404", notFound.statusCode === 404, String(notFound.statusCode));
+  const broken = await api.get("/page", { afterFunc: () => null.x });
+  check("a crashing transform keeps the HTTP status", broken.statusCode === 200 && broken.status === false, String(broken.statusCode));
 
   const file = await api.get("/file");
   const bytes = Buffer.from(await file.data.arrayBuffer());
@@ -59,6 +51,20 @@ try {
   const login = await roles.login({});
   check("login strips tokens from the result", login.data?.access === undefined && login.data?.refresh === undefined);
   check("login keeps non-token fields named like tokens", Array.isArray(login.data?.user?.access));
+
+  console.log("\ntokens never cross to the page");
+  // The rejected refresh above ended the session; these checks need a live one.
+  await api.setTokens({ accessToken: jwt(600), refreshToken: "r" });
+  const minted = await api.post("/auth/refresh", {});
+  check(
+    "a direct call to the refresh endpoint returns no token",
+    minted.status && !minted.data?.access && !minted.data?.token && !minted.data?.refresh,
+    JSON.stringify(minted.data),
+  );
+  const echoed = await api.get("/echo-auth");
+  check("a response echoing the live token has it removed", echoed.status && echoed.data?.seen === undefined);
+  const viaSocket = await api.getSocketToken("/auth/refresh").then(() => "LEAKED", () => "refused");
+  check("getSocketToken cannot read a token from the refresh endpoint", viaSocket === "refused");
 
   console.log("\nboot failures");
   const RealWorker = globalThis.Worker;
@@ -92,6 +98,5 @@ try {
   [api, roles, blocked, relative].forEach((instance) => instance.destroy());
 } finally {
   servers.forEach((server) => server.close());
-  console.log(`\n${pass} passed, ${fail} failed`);
-  process.exit(fail ? 1 : 0);
+  finish();
 }

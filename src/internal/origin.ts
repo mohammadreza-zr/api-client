@@ -1,4 +1,4 @@
-const ABSOLUTE_URL = /^[a-z][a-z\d+\-.]*:/i;
+import { hasScheme } from "./url";
 
 function originOf(url: string): string | undefined {
   try {
@@ -36,7 +36,7 @@ export function isTrustedUrl(url: string, trusted: ReadonlySet<string>): boolean
     const origin = page ? originOf(new URL(url, page).href) : undefined;
     return origin !== undefined && trusted.has(origin);
   }
-  if (!ABSOLUTE_URL.test(url)) return true;
+  if (!hasScheme(url)) return true;
   const origin = originOf(url);
   return origin !== undefined && trusted.has(origin);
 }
