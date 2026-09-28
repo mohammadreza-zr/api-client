@@ -62,6 +62,17 @@ A security and correctness pass. Every fix below has a regression test in
   fake HTTP 500.
 - Worker mode: `login()` stripped non-token fields that share a token key name,
   such as `user.access: ["admin"]`.
+- Worker mode: responses to other calls could carry tokens to the page — for
+  example `api.post("/auth/refresh")`, or an endpoint echoing the bearer
+  token. Every response leaving the worker now has the session's tokens
+  redacted, and calls to the login or refresh endpoint lose their token fields.
+- Worker mode: a response transform that threw lost the HTTP status.
+- `getCsrfToken` may now return a promise; one that never settles is given up
+  after 5 s instead of blocking writes and refreshes.
+- Waiting for another tab's refresh lock is bounded by `timeout`, so a frozen
+  tab can't stall refreshes everywhere.
+- `CookieStorage` caps the chunk count it trusts, so a planted cookie can't
+  freeze the tab.
 - Using the client with no `baseUrl` on the server (Node, SSR, tests) failed
   with `Failed to parse URL from /users`. It now fails with a message naming
   the option and the env variables to set.

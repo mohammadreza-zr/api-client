@@ -11,7 +11,7 @@ An honest account of what this client protects against, and what it doesn't.
 | **Token theft via XSS** | Worker isolation + memory storage | **Strong** — no readable variable, no storage key |
 | **Token use via XSS** | None | **None** — see below |
 | **Token sent to another origin** | Token and CSRF header only go to the `baseUrl` origin and `authOrigins` | **Strong** — an injected or third-party URL gets no credentials |
-| **Token read by page code** | `getAccessToken()` refused unless `exposeTokens: true`; sockets get a server-issued ticket via `getSocketToken()` | **Strong** unless you opt in |
+| **Token read by page code** | `getAccessToken()` refused unless `exposeTokens: true`; sockets get a server-issued ticket via `getSocketToken()`; every response leaving the worker has the session's tokens redacted, and responses from the login/refresh endpoints lose their token fields | **Strong** unless you opt in — see the caveat below |
 | **Path injection via URL values** | `addTemplateToUrl` / `addToUrl` values encoded as one segment | **Strong** |
 | **CSRF** | Double-submit header mirroring | **Strong**, if your server enforces it |
 | **Token leakage in logs** | Tokens never enter `LogEntry`, `AuthState` or tab messages | **Strong** |
@@ -21,6 +21,10 @@ An honest account of what this client protects against, and what it doesn't.
 | **Malicious dependency** | Zero runtime dependencies | **Strong** |
 
 ---
+
+## Endpoints that mint tokens
+
+The worker redacts the session's own tokens from every response, and strips token fields from the login and refresh endpoints. It cannot know about other endpoints of yours that hand out a new credential to an authenticated caller — an OAuth token exchange, an API-key endpoint, a socket-ticket endpoint. Injected script can call those through the client like any other request and read what they return. Keep such credentials short-lived and narrowly scoped, and don't return long-lived bearer tokens from them.
 
 ## The uncomfortable truth about XSS
 

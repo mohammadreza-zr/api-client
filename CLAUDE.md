@@ -40,6 +40,8 @@ Each suite starts its own real `node:http` server (`verify/server.mjs`, `verify/
 
 **Crossing the worker boundary.** Anything sent to the worker must be structured-cloneable. Function options are either served from the host over the bridge (`storage` and CSRF: the worker sends `storage` / `csrf` messages and the host answers) or they force inline mode.
 
+**Worker boundary.** Every result the worker sends to the page passes `redact()` in `worker-entry.ts`: the session's live tokens are removed wherever they appear, and results from the login/refresh endpoints lose their token fields. New message kinds that return data must go through it too.
+
 **Token exposure.** Only `getAccessToken()` returns a token to page code, and only when `exposeTokens: true` — enforced inside `CoreClient`, so in worker mode the worker itself refuses. `getSocketToken()` is a plain request built in `client.ts`, returning the server's ticket, never the access token.
 
 **Token trust.** The engine attaches `Authorization` and the CSRF header only when the final URL is relative or its origin is the `baseUrl` origin or in `authOrigins` (`internal/origin.ts`). Never attach credentials anywhere else.

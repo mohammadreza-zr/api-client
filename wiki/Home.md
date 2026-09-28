@@ -42,7 +42,7 @@ Including the rows where this library loses.
 | | axios | ky | @mrzr/api-client |
 |---|---|---|---|
 | Zero runtime dependencies | ✗ | ✓ | ✓ |
-| Bundle, min+gzip | ~14 KB | **~4 KB** | 17.0 KB |
+| Bundle, min+gzip | ~14 KB | **~4 KB** | 17.4 KB |
 | Built on | XHR / node:http | fetch | fetch |
 | Retry with backoff | via `axios-retry` | **✓ built in** | ✗ *(not yet)* |
 | Interceptors / hooks | **✓ global** | **✓ global** | per-request transforms |
@@ -53,7 +53,7 @@ Including the rows where this library loses.
 | **Cancel by URL pattern / scope** | ✗ | ✗ | **✓** |
 | CSRF double-submit | partial | ✗ | ✓ |
 
-- **Size.** 17.0 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even with `worker: false` — a runtime flag can't be tree-shaken.
+- **Size.** 17.4 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even with `worker: false` — a runtime flag can't be tree-shaken.
 - **Retry.** Not implemented. It has to interact correctly with refresh-and-retry, cancellation and `takeLatest`; shipping it half-right would be worse than not shipping it.
 
 ---

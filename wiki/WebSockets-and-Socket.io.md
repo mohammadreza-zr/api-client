@@ -17,10 +17,12 @@ const socket = io("https://realtime.example.com", {
 });
 ```
 
+Anything your ticket endpoint returns reaches page code, so an injected script can request a ticket too. Make tickets **short-lived, single-use and valid only for the socket**, so one can't be replayed or used against the API. In worker mode the call never returns the session's own tokens: they are redacted from every response, and pointing `getSocketToken` at the configured login or refresh endpoint strips the token fields, so the call rejects.
+
 This fits both cases:
 
 - **The socket needs a different token** — your server mints it (a short-lived, single-use ticket is ideal).
-- **The socket accepts the API token** — your endpoint can simply return a short-lived token of the same kind.
+- **The socket accepts the API token** — your endpoint can mint a *new*, short-lived token of the same kind. Echoing the session's current access token won't work in worker mode, since it is redacted; that case is what `exposeTokens` below is for.
 
 The endpoint may answer with the token as a plain string, or as `{ token }`, `{ ticket }` or `{ socketToken }`, optionally wrapped in `{ data }`. It is called with `POST` by default; pass `{ method: "GET" }` for a GET endpoint. Any other [[Request Config]] option works too:
 
