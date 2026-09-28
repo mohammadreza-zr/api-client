@@ -10,6 +10,8 @@ Documentation only; no code changes.
   worker mode, cookie-mode session rules, response redaction, the request
   lifecycle, plugins as interceptors and socket credentials.
 - A plain package description on npm.
+- The README and the package `homepage` point to the documentation website,
+  https://api-client.mrzr.ir, and its live demo.
 
 ## 3.0.0 - 2026-09-28
 

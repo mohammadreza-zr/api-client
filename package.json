@@ -77,7 +77,7 @@
   "bugs": {
     "url": "https://github.com/mohammadreza-zr/api-client/issues"
   },
-  "homepage": "https://github.com/mohammadreza-zr/api-client#readme",
+  "homepage": "https://api-client.mrzr.ir",
   "publishConfig": {
     "access": "public",
     "provenance": true
