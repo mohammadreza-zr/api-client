@@ -109,6 +109,15 @@ A security and correctness pass. Every fix below has a regression test in
   access token never leaves the worker. For socket servers that accept the
   API token itself, `api.getAccessToken()` returns it (refreshed if about to
   expire) behind the new `exposeTokens: true` option.
+- **Plugins.** `createClient({ plugins })` takes optional add-ons with four
+  hooks (`configure`, `beforeRequest`, `afterResponse`, `extend`). They run
+  on the page, never see the token, and a failing plugin fails one call,
+  never the client. Plugins ship as separate entry points, so an app pays
+  only for what it imports.
+- **`services` plugin** (`@mrzr/api-client/services`): several APIs on one
+  session — `api.service("files").get("/uploads")`, with per-service base
+  URL, timeout, headers and `auth: false` for third parties. Service names
+  are typed.
 - `authOrigins`, `responseType` and `IRes.body` (see below).
 
 ### Changed

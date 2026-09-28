@@ -42,6 +42,8 @@ Each suite starts its own real `node:http` server (`verify/server.mjs`, `verify/
 
 **Worker boundary.** Every result the worker sends to the page passes `redact()` in `worker-entry.ts`: the session's live tokens are removed wherever they appear, and results from the login/refresh endpoints lose their token fields. New message kinds that return data must go through it too.
 
+**Plugins** (`src/plugin.ts`) run in `wrap()` in `client.ts`, around the five verbs only, on the page — never in the worker (they are functions; `toSerializableOptions` strips them). Each built-in plugin is its own tsup entry (`src/plugins/*.ts`) with an `exports` subpath, plus a root folder stub (`services/package.json`) for `node10` resolution; a plugin uses only the public `ApiClient`, never internals. A new plugin needs all three and a line in `verify/package.mjs`.
+
 **Token exposure.** Only `getAccessToken()` returns a token to page code, and only when `exposeTokens: true` — enforced inside `CoreClient`, so in worker mode the worker itself refuses. `getSocketToken()` is a plain request built in `client.ts`, returning the server's ticket, never the access token.
 
 **Token trust.** The engine resolves each URL once with `resolveRequestUrl` (the platform URL parser, against the page) and uses that exact string both for the trust check and for `fetch`, so the two cannot disagree. `Authorization` and the CSRF header go only to the `baseUrl` origin, the page origin and `authOrigins` (`internal/origin.ts`). Never classify URLs by hand, and never attach credentials anywhere else. App hooks (`onLog`, `onError`, …) are always called through `callHook`, so a throwing hook can't break a request.

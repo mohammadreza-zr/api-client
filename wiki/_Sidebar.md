@@ -22,6 +22,7 @@
 - [[Web Worker Isolation]]
 - [[Multi-Tab Sync]]
 - [[WebSockets and Socket.io]]
+- [[Plugins]]
 - [[Logging and Observability]]
 - [[Security Model]]
 

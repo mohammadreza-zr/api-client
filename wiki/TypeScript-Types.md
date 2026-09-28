@@ -303,6 +303,7 @@ interface ClientOptions {
   baseUrl?: string;
   authOrigins?: string[];
   exposeTokens?: boolean;
+  plugins?: readonly ApiPlugin[];
   timeout?: number;
   throwError?: boolean;
 

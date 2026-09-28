@@ -16,6 +16,7 @@ const api = createClient({ /* ClientOptions */ });
 |---|---|---|---|
 | **Connection** ||||
 | `baseUrl` | `string` | auto-detected | Prefix for relative URLs. Trailing slashes are normalized. See below |
+| `plugins` | `ApiPlugin[]` | `[]` | Optional add-ons, applied in order. See [[Plugins]] |
 | `exposeTokens` | `boolean` | `false` | Allow `api.getAccessToken()`, for a socket server that accepts the API token. Lets page code read the token; prefer `getSocketToken`. See [[WebSockets and Socket.io]] |
 | `authOrigins` | `string[]` | `[]` | Extra origins allowed to receive the access token and CSRF header. The `baseUrl` origin and the page's own origin are always allowed; every other URL is sent without them. URLs are resolved the way `fetch` resolves them before the check, so `//host`, `\\host` and `/\host` count as that host |
 | `timeout` | `number` | `30000` | Per-attempt timeout in ms; `0` disables |
@@ -254,6 +255,8 @@ createClient({
 ```
 
 ### Multiple APIs in one app
+
+When the APIs share one login, use the [`services` plugin](Plugins): one client, one session, `api.service("files").get(...)`. When they need separate logins, create separate clients:
 
 ```ts
 export const mainApi = createClient({
