@@ -93,11 +93,11 @@ Not directly — `fetch` has no upload-progress event, so no `fetch`-based clien
 
 ### Does it support Server-Sent Events or WebSockets?
 
-No. Use `EventSource` and `WebSocket` directly — they're different protocols with different lifecycles.
+It doesn't open them — use `EventSource`, `WebSocket` or socket.io directly. It does give them a credential: `api.getSocketToken(url)` fetches a socket ticket from your server over the authenticated client. See [[WebSockets and Socket.io]].
 
 ### Can I intercept requests like axios?
 
-There are no interceptors, but the equivalents exist: `headers`, `beforeFunc`, `afterFunc`, `onError`, `onLog`, and built-in auth. See the mapping in [[Migration Guide]].
+Yes, with a plugin: `beforeRequest` and `afterResponse` run around every call, like global interceptors. For a single call, `headers`, `beforeFunc` and `afterFunc` do the same. See [[Plugins]].
 
 ### Why do custom functions disable worker mode?
 

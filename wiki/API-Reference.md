@@ -321,6 +321,17 @@ buildQueryString({ page: 1, q: "", tags: ["x", null, "y"] });
 
 ---
 
+## `detectBaseUrl()` and `BASE_URL_KEYS`
+
+```ts
+function detectBaseUrl(): string;
+const BASE_URL_KEYS: readonly string[];
+```
+
+`detectBaseUrl()` returns the base URL the client would find in the environment, or `""` when none of the variables in `BASE_URL_KEYS` is set — useful for debugging which variable won. The order of `BASE_URL_KEYS` is the detection order; see [[Client Options]].
+
+---
+
 ## `getTokenExpiry(token?)`
 
 ```ts

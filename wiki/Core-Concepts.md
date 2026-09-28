@@ -145,18 +145,22 @@ Headers merge (per-request keys override client keys, case-insensitively for `Co
 ## The request lifecycle, end to end
 
 ```
-1.  buildUrl()            addToUrl → addTemplateToUrl → baseUrl join → params
-2.  beforeFunc(body)      your outgoing transform
-3.  preflight refresh     if token expires within refreshSkewMs / uploadSkewMs
-4.  build headers         defaults + per-request + Authorization + CSRF
-5.  serialize body        JSON.stringify, unless the body is raw (FormData/Blob/…)
-6.  fetch()               with a linked timeout + user signal + cancel registry
-7.  on 401 (+auth wanted) refresh once → retry once  (streams can't replay)
-8.  parse                 JSON, or text, or JSON-without-the-header, or undefined
-9.  unwrap                lift `data` unless fullData
-10. beforeSelectOptions() then afterFunc() — your incoming transforms
-11. log                   if `log: true`
-12. throw or resolve      ApiError vs. envelope
+1.  plugins               beforeRequest, in order (on the page)
+2.  buildUrl()            addToUrl → addTemplateToUrl (encoded) → baseUrl join → params
+3.  resolve               against the page, as fetch would — this exact URL is checked and fetched
+4.  beforeFunc(body)      your outgoing transform
+5.  preflight refresh     if token expires within refreshSkewMs / uploadSkewMs
+6.  build headers         defaults + per-request; Authorization + CSRF only for trusted origins
+7.  serialize body        JSON.stringify unless raw (FormData/Blob/…); Content-Type only with a body
+8.  fetch()               with a linked timeout + user signal + cancel registry
+9.  on 401 (+auth wanted) refresh once → retry once  (streams can't replay)
+10. parse                 per responseType: JSON, text, or Blob for binary — inside the timeout
+11. unwrap                lift `data` unless fullData; the whole payload stays on `body`
+12. beforeSelectOptions() then afterFunc() — on success only
+13. redact                worker mode: the session's tokens never cross to the page
+14. log                   if `log: true`
+15. plugins               afterResponse, in order
+16. throw or resolve      ApiError vs. envelope
 ```
 
 Each numbered step maps to an option documented in **[[Request Config]]**.

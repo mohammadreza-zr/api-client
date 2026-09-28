@@ -54,7 +54,8 @@ createClient({ authMode: "cookie", xsrfCookieName: "XSRF-TOKEN", xsrfHeaderName:
 
 ## Behaviour details
 
-- **Only unsafe methods** get the header: `POST`, `PUT`, `PATCH`, `DELETE`. `GET` is a safe method and is left alone.
+- **Only unsafe methods** get the header: `POST`, `PUT`, `PATCH`, `DELETE`, plus the refresh request. `GET` is a safe method and is left alone.
+- **Only trusted origins** get the header: the `baseUrl` origin, the page origin and `authOrigins`. A request to any other host goes out without it.
 - **An explicit per-request header always wins** — you can override it anywhere.
 - **Missing token → no header.** The request still goes out; your server rejects it if it requires one.
 - **A throwing `getCsrfToken` is caught** and treated as "no token", so a broken provider can't break every request.
@@ -75,24 +76,17 @@ createClient({
 
 `getCsrfToken` **takes precedence** over `xsrfCookieName`.
 
-### Worker mode requires `getCsrfToken`
+### Worker mode
 
-Web Workers have no `document`, so a cookie read is impossible inside one. The client solves this by resolving the token **on the main thread** and forwarding the resulting string with each request.
-
-That resolution happens through `getCsrfToken` — a function can't be structured-cloned into a worker, so the host calls it and posts the value across.
+Web Workers have no `document`, so the worker can't read the cookie itself. When a request needs the token, the worker asks the page, which reads `xsrfCookieName` or calls your `getCsrfToken` and answers. Both options therefore work the same in worker mode, and the token is read fresh for every write and for the refresh request.
 
 ```ts
-// ✅ works in worker mode
-createClient({
-  authMode: "cookie",
-  getCsrfToken: () => readCookie("csrftoken"),
-});
-
-// ⚠️ xsrfCookieName alone: the worker host also reads document.cookie on the
-// main thread, so this works too — but an explicit provider is clearer and
-// covers meta tags and in-memory tokens as well.
+// Both work in worker mode.
 createClient({ authMode: "cookie", xsrfCookieName: "csrftoken" });
+createClient({ authMode: "cookie", getCsrfToken: () => readCookie("csrftoken") });
 ```
+
+`getCsrfToken` may return a promise. One that doesn't settle within 5 seconds counts as "no token", so a stuck provider can't stall every write.
 
 A small helper:
 

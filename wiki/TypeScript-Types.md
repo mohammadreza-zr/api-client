@@ -355,8 +355,11 @@ interface ApiClient {
   login<R = unknown>(body: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
   logout<R = unknown>(config?: RequestConfig<R>): Promise<IRes<R>>;
   setTokens(tokens: TokenPair): Promise<void>;
-  refresh(): Promise<string | null>;
+  refresh(): Promise<boolean>;
+  getSocketToken(url: string, options?: SocketTokenOptions): Promise<string>;
+  getAccessToken(): Promise<string | undefined>;   // needs exposeTokens: true
   getAuthState(): Promise<AuthState>;
+  restoreSession(url?: string): Promise<AuthState>;
   onAuthStateChange(listener: (state: AuthState) => void): () => void;
 
   cancel(selector?: CancelSelector, reason?: string): number;
@@ -367,6 +370,33 @@ interface ApiClient {
   destroy(): void;
 }
 ```
+
+---
+
+## Plugin types
+
+```ts
+interface ApiPlugin<Extension extends object = object> {
+  name: string;
+  configure?(options: ClientOptions): ClientOptions;
+  beforeRequest?(request: PluginRequest): PluginRequest;
+  afterResponse?(result: IRes<unknown>, request: PluginRequest): IRes<unknown>;
+  extend?(client: ApiClient): Extension;
+}
+
+interface PluginRequest {
+  method: HttpMethod;
+  url: string;
+  body?: unknown;
+  config?: RequestConfig<unknown>;
+}
+
+// The methods a list of plugins adds to the client — what createClient returns
+// is ApiClient & PluginExtensions<typeof plugins>.
+type PluginExtensions<P extends readonly ApiPlugin[]>;
+```
+
+How to write one: **[[Plugins]]**.
 
 ---
 

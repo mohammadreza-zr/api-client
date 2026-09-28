@@ -33,7 +33,7 @@ An XSS payload running on your page has no variable to read and no storage key t
 | Host → worker | Serializable options, method, URL, body, serializable config |
 | Worker → host | `IRes` envelopes, `AuthState`, `LogEntry`, ready/failure signals |
 
-Never a token, in either direction. A login response usually contains the tokens themselves, so the worker strips every known token field from `result.data` before the envelope is posted back — the extractor has already captured them into the worker's closure, and the main thread receives the rest of the payload (`user`, `message`, …).
+Never a token, in either direction. Every result is checked before it is posted back: the session's own tokens are removed wherever they appear, and responses from the login and refresh endpoints lose their token fields — the extractor has already captured them into the worker's closure, and the main thread receives the rest of the payload (`user`, `message`, …).
 
 ---
 
@@ -102,16 +102,17 @@ Other function options are applied on the **host** instead, so they keep working
 | Option | Handling |
 |---|---|
 | `beforeFunc` | Applied on the main thread before the body is posted in |
-| `afterFunc` | Applied on the main thread after the result comes back |
+| `afterFunc` | Applied on the main thread after the result comes back, on success only |
 | `beforeSelectOptions` | Same |
-| `getCsrfToken` | Called on the main thread; the resulting string is forwarded |
+| `getCsrfToken` | Called on the main thread whenever the worker asks for the token |
+| `plugins` | Run on the main thread, around each call |
 | `onAuthStateChanged` / `onAuthFailure` / `onError` / `onLog` | Invoked on the main thread from worker messages |
 
 Observable behaviour is identical.
 
-### 2. The `login()` response is stripped of tokens
+### 2. Responses are stripped of tokens
 
-The response body that carries the tokens stays where the tokens stay. `api.login()` resolves on the main thread with the sanitized payload — the token fields are removed before the envelope crosses the boundary.
+The tokens stay where they are. `api.login()` resolves on the main thread with the sanitized payload, and every other response has the session's tokens removed before it crosses the boundary — so a call to the refresh endpoint, or an endpoint that echoes the bearer token, can't hand the page a token either.
 
 ### 3. `ReadableStream` bodies are rejected
 
@@ -123,7 +124,7 @@ A stream cannot be structured-cloned. Rather than an opaque `DataCloneError` fro
 
 ### 4. CSRF cookies are read on the host
 
-Workers have no `document`. The host reads `document.cookie` (or calls your `getCsrfToken`) and mirrors the value into the request headers before posting. See [[CSRF Protection]].
+Workers have no `document`. When a request needs the CSRF token, the worker asks the host, which reads `document.cookie` (or calls your `getCsrfToken`) and answers. See [[CSRF Protection]].
 
 ### 5. Storage is owned by the host
 

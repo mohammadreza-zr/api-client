@@ -77,6 +77,8 @@ An **absolute URL always wins** and bypasses the base entirely:
 await api.get("https://cdn.example.com/manifest.json");
 ```
 
+The access token and CSRF header only go to trusted origins — the `baseUrl` origin, the page origin and [`authOrigins`](Client-Options). A request to any other host, like the CDN above, goes out without them.
+
 Override the base for a single call:
 
 ```ts

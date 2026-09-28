@@ -68,10 +68,11 @@ catch (e) {
 
 ### Interceptors
 
-There are no interceptors; the equivalents are options and hooks.
+Global interceptors are [[Plugins]] (`beforeRequest` / `afterResponse`); much of what they're usually written for is built in or a single option.
 
 | axios | api-client |
 |---|---|
+| `interceptors.request.use` / `interceptors.response.use` | A plugin with `beforeRequest` / `afterResponse` |
 | Request interceptor adding a token | Built in — `login()` / `setTokens()` |
 | Request interceptor adding headers | `headers` option, or per-request `headers` |
 | Request interceptor transforming the body | `beforeFunc` |

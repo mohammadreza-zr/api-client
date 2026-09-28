@@ -129,13 +129,15 @@ console.log(res.statusCode, res.message, res.error);
 
 Symptom: a `GET /users` shows up in the Network tab as `https://my-app.com/users` and returns your `index.html` (or a 404 from your own router) rather than hitting the API.
 
-That means `baseUrl` resolved to `""`. Check what it actually resolved to:
+That means no `baseUrl` was found, so the client used the page's own origin (its default in a browser). Check what detection found:
 
 ```ts
 import { detectBaseUrl } from "@mrzr/api-client";
 
 console.log(JSON.stringify(detectBaseUrl())); // "" means nothing was found
 ```
+
+On the server there is no page to fall back to, so the same mistake fails with `No base URL for "/users"…`, naming the option and the variables to set.
 
 Common causes:
 
@@ -226,8 +228,8 @@ client only learns about a session from the server's responses.
   const state = await api.restoreSession("/api/auth/me");
   ```
 
-- **If it flips to `false` unexpectedly**, a request returned 401/403 after the
-  refresh flow. That is the server rejecting the cookie — check that it is
+- **If it flips to `false` unexpectedly**, the refresh endpoint rejected the
+  session (401/403). That is the server rejecting the cookie — check that it is
   actually being sent (`credentials: "include"`, and for a cross-origin API,
   `Access-Control-Allow-Credentials: true` with an explicit origin).
 
@@ -301,9 +303,9 @@ Check, in order:
 Check, in order:
 
 1. `worker: false` in your options.
-2. `extractTokens` or `buildRefreshBody` supplied — functions can't cross the boundary.
-4. CSP blocking `blob:` — add `worker-src 'self' blob:`.
-5. SSR — expected; `window` is undefined.
+2. `extractTokens` or `buildRefreshBody` passed as **functions** — they can't cross the boundary. The declarative `TokenFieldMap` / `RefreshBodyConfig` forms keep worker mode.
+3. CSP blocking `blob:` — add `worker-src 'self' blob:`. Browsers often report the block only after the client exists, so `isWorker` can switch from `true` to `false` once the worker fails to start (or after 10 seconds without starting); check it after the first request.
+4. SSR — expected; `window` is undefined.
 
 ```ts
 console.log({
@@ -501,13 +503,13 @@ await api.post("/upload", new Uint8Array([72, 105]), {
 
 ### `Content-Type` is wrong on an upload
 
-Precedence: per-request header → non-JSON client header → the body's own type. If a stale `application/json` is sticking, you probably set it client-wide. Override per request:
+Precedence: per-request header → non-JSON client header → the body's own type. A client-wide `application/json` never sticks to `FormData`, `Blob`, typed arrays or `URLSearchParams`, and `FormData` always gets the runtime's multipart boundary.
+
+If a *different* client-wide type (say `application/xml`) is sticking, it counts as deliberate. Set the right type on that request, or drop the default and set it only where you need it:
 
 ```ts
-await api.post("/upload", form, { headers: { "Content-Type": "" } });
+await api.post("/upload", pngBlob, { headers: { "Content-Type": "image/png" } });
 ```
-
-Or drop it from the client defaults and set it only where you send JSON.
 
 ---
 

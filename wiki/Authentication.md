@@ -209,11 +209,12 @@ The client therefore tracks the session from what the server actually does:
 | `login()` returns 2xx | `true` |
 | `restoreSession()` probe returns 2xx | `true` |
 | a refresh succeeds | `true` |
-| a request 401/403s after the retry flow | `false` |
+| the refresh endpoint rejects the session (401/403) | `false`, in every tab |
+| a request with `refreshTokenCheck: false` gets a 401 | `false` |
 | `logout()` | `false` |
 | a fresh page load | `false` **until you ask the server** |
 
-The positive direction is only ever asserted where the server's answer means it — `login()`, `refresh()` and the `restoreSession()` probe. An ordinary request that 2xxs proves **nothing**: public endpoints return 200 to anonymous visitors too, so a plain success never flips the flag (and a 404/500 never clears it). If an endpoint 401/403s after the refresh-and-retry flow, that is strong evidence the session is gone, and the flag flips to `false`.
+The positive direction is only ever asserted where the server's answer means it — `login()`, `refresh()` and the `restoreSession()` probe. An ordinary request that 2xxs proves **nothing**: public endpoints return 200 to anonymous visitors too, so a plain success never flips the flag (and a 404/500 never clears it). The negative direction comes from the refresh endpoint: when it rejects the session, the flag flips to `false` in every tab. A `403` from an ordinary endpoint means "not allowed", not "not signed in", so it never clears the flag — and neither does a network failure during refresh.
 
 That "fresh page load" row is the important one. After a reload the cookie is still in the browser and requests will succeed — but the client has no way to know that yet. Ask explicitly, once, on startup:
 
