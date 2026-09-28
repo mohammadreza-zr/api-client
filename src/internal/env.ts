@@ -183,7 +183,8 @@ export function pageOrigin(): string {
  * would — and so a Blob worker, whose own base is `blob:`, gets a usable one.
  */
 export function resolveBaseUrl(explicit?: string): string {
-  const base = explicit ?? (detectBaseUrl() || pageOrigin());
+  // `""` means "the page's own origin": explicit, so env detection must not override it.
+  const base = explicit === undefined ? detectBaseUrl() || pageOrigin() : explicit || pageOrigin();
   try {
     if (base && typeof location !== "undefined") return new URL(base, location.href).href.replace(/\/+$/, "");
   } catch {
@@ -192,11 +193,18 @@ export function resolveBaseUrl(explicit?: string): string {
   return base.replace(/\/+$/, "");
 }
 
+const FETCHABLE_SCHEME = /^(https?|blob|data):/i;
+
 /**
  * Fails fast, and helpfully, on a URL that cannot be fetched: a relative path
- * where there is no page to resolve it against (Node, SSR, tests).
+ * where there is no page to resolve it against (Node, SSR, tests), or a
+ * `baseUrl` written without its scheme (`"localhost:4000"` parses as the
+ * scheme `localhost:`, and fetch only says "fetch failed").
  */
 export function assertFetchable(url: string): void {
+  if (hasScheme(url) && !FETCHABLE_SCHEME.test(url)) {
+    throw new Error(`"${url}" is not an http(s) URL. Does baseUrl need "http://" or "https://" in front?`);
+  }
   if (hasScheme(url) || typeof location !== "undefined") return;
   throw new Error(
     `No base URL for "${url}". Pass createClient({ baseUrl: "https://api.example.com" }) ` +

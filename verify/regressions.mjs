@@ -154,6 +154,9 @@ try {
   // set() and clear() walk the previous chunk count: a planted one used to loop ~10⁹ times.
   plantedStorage.set({ accessToken: "a", refreshToken: "r" });
   plantedStorage.clear();
+  const oversized = new CookieStorage("huge.tokens");
+  oversized.set({ accessToken: "a".repeat(30_000) });
+  check("a pair too large for cookies writes nothing partial", oversized.get() === null && !document.cookie.includes("huge.tokens"));
   check("a planted chunk count cannot freeze CookieStorage", planted === null && Date.now() - t1 < 100, `${Date.now() - t1}ms`);
   delete globalThis.document;
 

@@ -111,7 +111,15 @@ try {
   globalThis.location = { href: `${BASE}/app/page`, origin: BASE, protocol: "http:" };
   check("in a browser, no configuration defaults to the page origin", (await resolvedBaseUrl()) === BASE);
   check("a relative baseUrl resolves against the page", (await resolvedBaseUrl({ baseUrl: "/" })) === BASE);
+  process.env.NEXT_PUBLIC_API_URL = "http://127.0.0.1:9/wrong";
+  check('baseUrl "" means the page origin, and beats env detection', (await resolvedBaseUrl({ baseUrl: "" })) === BASE);
   delete globalThis.location;
+
+  clearEnv();
+  const noScheme = createClient({ baseUrl: "localhost:4601", worker: false, multiTab: false, throwError: false });
+  const schemeless = await noScheme.get("/echo");
+  check('a baseUrl without "http://" says so', schemeless.message.includes('need "http://" or "https://"'), schemeless.message);
+  noScheme.destroy();
 
   console.log("\ntrailing slashes");
 

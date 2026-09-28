@@ -115,7 +115,8 @@ export function runRefresh(ctx: RefreshContext): Promise<boolean> {
     await ctx.auth.flush();
     ctx.tabs.post({ type: "refreshed", tabId: ctx.tabs.tabId, expiresAt: ctx.auth.expiresAt });
     return true;
-  }, ctx.timeout);
+    // The tab ahead may spend a full `timeout` on its own refresh; don't give up just before it lands.
+  }, ctx.timeout * 2);
 
   // Never got the lock in time: a failed refresh, which keeps the session.
   return turn.catch((error: unknown) => {

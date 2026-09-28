@@ -170,14 +170,14 @@ export function tokenFieldNames(mapping?: TokenFieldMap): Set<string> {
  * `user.access: ["admin"]` is data that must survive.
  */
 export function redactTokens(body: unknown, fields: ReadonlySet<string>, values: ReadonlySet<string>): unknown {
-  if (!body || typeof body !== "object") return body;
+  if (!body || typeof body !== "object" || (fields.size === 0 && values.size === 0)) return body;
   const seen = new Set<object>();
   const isSecret = (value: unknown): boolean => typeof value === "string" && values.has(value);
 
   const walk = (value: unknown, depth: number): unknown => {
     if (value === null || typeof value !== "object") return value;
-    // Cycles are impossible in parsed JSON, but a custom body is not.
-    if (depth > 10 || seen.has(value)) return value;
+    // `seen` stops cycles; the depth cap only guards the stack against absurd nesting.
+    if (depth > 64 || seen.has(value)) return value;
     seen.add(value);
 
     if (Array.isArray(value)) {

@@ -33,7 +33,9 @@ export function trustedOrigins(baseUrl: string, extra: readonly string[] = []): 
 export function isTrustedUrl(url: string, trusted: ReadonlySet<string>): boolean {
   if (url.startsWith("//")) {
     const page = typeof location !== "undefined" ? location.href : undefined;
-    const origin = page ? originOf(new URL(url, page).href) : undefined;
+    // A blob: worker's own location can't resolve it; `originOf` then reads it as untrusted.
+    const scheme = page?.replace(/^blob:/, "").startsWith("https:") ? "https:" : "http:";
+    const origin = page ? originOf(`${scheme}${url}`) : undefined;
     return origin !== undefined && trusted.has(origin);
   }
   if (!hasScheme(url)) return true;

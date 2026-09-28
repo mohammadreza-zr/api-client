@@ -84,6 +84,8 @@ const MAX_COOKIE_CHUNKS = 16;
  * `<key>.0`, `<key>.1`, … with `<key>` holding the chunk count.
  */
 export class CookieStorage implements TokenStorage {
+  private warnedTooLarge = false;
+
   constructor(
     private key: string,
     private days = 7,
@@ -125,7 +127,12 @@ export class CookieStorage implements TokenStorage {
     }
     // Slice before encoding, so no `%XX` escape is split across two cookies.
     const count = Math.ceil(json.length / JSON_CHUNK_SIZE);
-    if (count > MAX_COOKIE_CHUNKS) return;
+    if (count > MAX_COOKIE_CHUNKS) {
+      // Persistence errors are swallowed by design, so say it here once instead of losing the session silently.
+      if (!this.warnedTooLarge) console.warn(`[api-client] tokens too large for CookieStorage (${json.length} chars); use storage: "local"`);
+      this.warnedTooLarge = true;
+      return;
+    }
     for (let i = 0; i < count; i++) {
       const part = json.slice(i * JSON_CHUNK_SIZE, (i + 1) * JSON_CHUNK_SIZE);
       this.write(`${this.key}.${i}`, encodeURIComponent(part), expires);

@@ -63,6 +63,10 @@ try {
   );
   const echoed = await api.get("/echo-auth");
   check("a response echoing the live token has it removed", echoed.status && echoed.data?.seen === undefined);
+  const deep = await api.get("/echo-auth-deep");
+  let innermost = deep.data;
+  while (innermost?.level) innermost = innermost.level;
+  check("a token nested 20 levels deep is removed too", deep.status && innermost && innermost.seen === undefined);
   const viaSocket = await api.getSocketToken("/auth/refresh").then(() => "LEAKED", () => "refused");
   check("getSocketToken cannot read a token from the refresh endpoint", viaSocket === "refused");
 
@@ -93,6 +97,10 @@ try {
   const relative = createClient({ baseUrl: "/api", throwError: false, multiTab: false });
   const ping = await relative.get("/ping");
   check("a relative baseUrl works in worker mode", ping.status === true && seenAt("/api/ping").length === 1);
+  const sameOrigin = createClient({ baseUrl: "", throwError: false, multiTab: false });
+  const pong = await sameOrigin.get("/pong");
+  check('baseUrl "" (the page origin) works in worker mode', pong.status === true, pong.message);
+  sameOrigin.destroy();
   delete globalThis.location;
 
   [api, roles, blocked, relative].forEach((instance) => instance.destroy());

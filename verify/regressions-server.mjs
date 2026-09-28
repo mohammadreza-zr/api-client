@@ -99,6 +99,11 @@ export function start(port) {
       }
       return json(res, 200, { data: { ok: true } });
     }
+    if (path === "/echo-auth-deep") {
+      let nested = { seen: req.headers.authorization?.slice(7) ?? null };
+      for (let i = 0; i < 20; i++) nested = { level: nested };
+      return json(res, 200, { data: nested });
+    }
     if (path === "/echo-auth") return json(res, 200, { data: { seen: req.headers.authorization?.slice(7) ?? null } });
     if (path === "/page") return json(res, 200, { data: [1, 2], meta: { total: 500 } });
     if (path === "/file") {
