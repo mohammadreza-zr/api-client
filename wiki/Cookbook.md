@@ -493,20 +493,15 @@ export async function isApiReachable(): Promise<boolean> {
 
 ```ts
 export async function download(path: string, filename: string) {
-  const res = await api.get<Blob>(path, {
-    headers: { Accept: "application/octet-stream" },
-    fullData: true,
-    timeout: 0,
-  });
+  const res = await api.get<Blob>(path, { responseType: "blob", timeout: 0 });
 
-  const blob = res.data instanceof Blob ? res.data : new Blob([String(res.data)]);
-  const url = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(res.data!);
   const a = Object.assign(document.createElement("a"), { href: url, download: filename });
   a.click();
   URL.revokeObjectURL(url);
 }
 ```
 
-> The client parses responses as JSON or text. For true binary downloads, calling `fetch` directly is simpler — the auth header is the only thing you lose, and you can read it from `getAuthState()`-adjacent app state or use cookie mode.
+> The download goes through the client, so it is authenticated and refreshes like any other request. `responseType: "blob"` makes the format explicit; the default `"auto"` would also return a `Blob` for a binary `content-type`.
 
 Next: **[[Migration Guide]]**

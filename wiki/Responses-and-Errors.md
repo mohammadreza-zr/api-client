@@ -47,15 +47,16 @@ Everything else is the real HTTP status.
 
 ## Body parsing
 
-The parser is deliberately forgiving:
+With the default `responseType: "auto"` the parser is deliberately forgiving:
 
 1. `204` / `205` → `data` is `undefined`.
-2. `content-type` contains `json` → `response.json()`.
-3. Otherwise → `response.text()`; empty text becomes `undefined`.
-4. Non-empty text is *tried* as JSON anyway (many servers omit the header), and falls back to the raw string.
-5. Any parse failure yields `undefined` rather than throwing.
+2. A non-textual `content-type` (files, images, PDFs, `application/octet-stream`) → a `Blob`, byte-exact. Decoding binary as text would corrupt it.
+3. Otherwise the body is read as text; empty text becomes `undefined`.
+4. Non-empty text is *tried* as JSON (many servers omit or mislabel the header), and falls back to the raw string.
 
-So a plain-text `500 Internal Server Error` page never crashes your error handler.
+So a plain-text `500 Internal Server Error` page never crashes your error handler. Pass `responseType: "json" | "text" | "blob" | "arrayBuffer"` to choose the format yourself.
+
+A body that fails mid-download — the connection drops, the request is canceled, or the timeout fires — fails the request (`408` for a timeout). A truncated body is never reported as a success.
 
 ### Where `message` and `errors` come from
 
@@ -75,7 +76,17 @@ Recommended server shape:
 
 ### Automatic unwrapping
 
-If the body has a `data` key, `res.data` is that value, not the wrapper. `fullData: true` disables this.
+If the body has a `data` key, `res.data` is that value, not the wrapper, and the whole body is kept on `res.body` so its siblings stay reachable:
+
+```ts
+const res = await api.get<Product[]>("/products");  // { data: [...], meta: { total: 500 } }
+res.data;                                          // the products
+(res.body as { meta: { total: number } }).meta.total;  // 500
+```
+
+`fullData: true` disables the unwrapping.
+
+`beforeSelectOptions` and `afterFunc` run on success only: they are written for the success shape, and on an error body they would crash and hide the real status. If a transform throws on a success, the result keeps its HTTP status with `status: false` and the error's message.
 
 ---
 

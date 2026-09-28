@@ -10,10 +10,12 @@ An honest account of what this client protects against, and what it doesn't.
 |---|---|---|
 | **Token theft via XSS** | Worker isolation + memory storage | **Strong** — no readable variable, no storage key |
 | **Token use via XSS** | None | **None** — see below |
+| **Token sent to another origin** | Token and CSRF header only go to the `baseUrl` origin and `authOrigins` | **Strong** — an injected or third-party URL gets no credentials |
+| **Path injection via URL values** | `addTemplateToUrl` / `addToUrl` values encoded as one segment | **Strong** |
 | **CSRF** | Double-submit header mirroring | **Strong**, if your server enforces it |
 | **Token leakage in logs** | Tokens never enter `LogEntry`, `AuthState` or tab messages | **Strong** |
 | **Cross-tab desync** | BroadcastChannel logout propagation | **Strong** |
-| **Refresh stampede** | Promise coalescing + leader election | **Strong** |
+| **Refresh stampede / token reuse** | Promise coalescing + cross-tab Web Lock | **Strong** where Web Locks exists |
 | **MITM** | Not addressed — use HTTPS | n/a |
 | **Malicious dependency** | Zero runtime dependencies | **Strong** |
 
@@ -23,7 +25,7 @@ An honest account of what this client protects against, and what it doesn't.
 
 > Worker isolation prevents token **theft**. It cannot stop an attacker who already has XSS from *using* your client.
 
-An injected script can call `api.post("/transfer", { to: "attacker" })` and the worker will attach the token. Isolation stops one specific thing: the token leaving the browser.
+An injected script can call `api.post("/transfer", { to: "attacker" })` and the worker will attach the token. Isolation stops one specific thing: the token leaving the browser. That holds because the token is only attached for trusted origins — `api.get("https://attacker.example")` goes out without it.
 
 Why that still matters:
 

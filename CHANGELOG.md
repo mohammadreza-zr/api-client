@@ -1,5 +1,96 @@
 # Changelog
 
+## Unreleased
+
+A security and correctness pass. Every fix below has a regression test in
+`verify/regressions.mjs` or `verify/regressions-worker.mjs` that fails on
+2.0.0.
+
+### Security
+
+- **The access token was sent to any origin.** An absolute URL or a
+  per-request `baseUrl` received `Authorization: Bearer …`, so a third-party
+  URL — or one injected by XSS, defeating worker isolation — could read the
+  token. The token and the CSRF header now go only to the `baseUrl` origin
+  and origins listed in the new `authOrigins` option.
+- **URL values could rewrite the path.** `addTemplateToUrl` and `addToUrl`
+  values are now encoded as one path segment: `{ id: "1/../admin?x=" }` no
+  longer reaches `/admin?x=`. Template substitution is single-pass.
+- **A tab without a session could log every other tab out**, and tabs with a
+  rotating refresh token could spend it twice (the server reads that as reuse
+  and revokes the session). Tabs now take turns refreshing through the Web
+  Locks API and adopt a sibling's fresh tokens instead of refreshing again. A
+  failed refresh only logs other tabs out when they share the session.
+- **The refresh request never sent the CSRF header**, so a CSRF-protected
+  refresh endpoint answered 403 and the user was logged out. In worker mode,
+  `login()` and `logout()` also skipped it. The worker now asks the host for
+  the token, so CSRF behaves identically in both modes.
+
+### Fixed
+
+- `logout()` could be undone by a refresh that was already in flight.
+- A refresh endpoint that never answered froze every request, whatever
+  `timeout` was set to. The refresh now has the client timeout.
+- In worker mode `api.refresh()` always resolved `true`, even when the
+  refresh was rejected.
+- `login()` kept the previous user's refresh token and `user` when the new
+  response didn't carry them.
+- `isAuthenticated` was `false` after a reload with an expired access token
+  and a valid refresh token, so apps redirected to login needlessly.
+- `setTokens({ accessToken: undefined })` did nothing; it now clears the
+  token, as documented.
+- A new opaque (non-JWT) token inherited the previous token's expiry.
+- Cookie mode: a 403 marked the user as signed out, and so did a network
+  failure during refresh.
+- `afterFunc` / `beforeSelectOptions` ran on error responses; a transform
+  written for the success shape crashed and replaced a 404 with `statusCode:
+  0`. They now run on success only, and a crashing transform keeps the HTTP
+  status.
+- Binary responses (files, images, PDFs) were decoded as text and corrupted.
+- The timeout stopped at the response headers; a stalled body hung forever.
+- `CookieStorage` silently lost token pairs over the ~4 KB cookie limit; large
+  values are now split across several cookies.
+- Worker mode: a worker blocked at boot (for example by a CSP `worker-src`
+  rule, which browsers report asynchronously) failed every request. It now
+  falls back to the main thread, like `worker: false`; `isWorker` reports it.
+- Worker mode: `destroy()` during boot left pending calls hanging forever
+  (React StrictMode, HMR).
+- Worker mode: a relative `baseUrl` such as `"/api"` could not resolve inside
+  the worker.
+- Worker mode: a throwing `beforeFunc` rejected with a raw error instead of
+  resolving like main-thread mode, and a worker failure was reported as a
+  fake HTTP 500.
+- Worker mode: `login()` stripped non-token fields that share a token key name,
+  such as `user.access: ["admin"]`.
+- Using the client with no `baseUrl` on the server (Node, SSR, tests) failed
+  with `Failed to parse URL from /users`. It now fails with a message naming
+  the option and the env variables to set.
+
+### Changed
+
+- **`baseUrl` defaults:** the explicit option, else an env variable, else the
+  page origin in a browser or worker. Detection adds `NEXT_PUBLIC_API_BASE_URL`,
+  `VITE_API_BASE_URL`, `REACT_APP_API_URL`, `EXPO_PUBLIC_API_URL`,
+  `PUBLIC_API_BASE_URL` and `API_BASE_URL`.
+- **`Content-Type` is only sent with a body.** A GET or DELETE no longer
+  carries `application/json`, which forced a CORS preflight on every
+  cross-origin read.
+- **Non-textual responses resolve as a `Blob`** (`responseType: "auto"`).
+  Use the new `responseType` option (`"json" | "text" | "blob" |
+  "arrayBuffer"`) to choose.
+- When `data` is unwrapped from `{ data }`, the whole payload is kept on the
+  new `IRes.body`, so siblings such as pagination `meta` stay reachable.
+- `getCsrfToken` may return a promise.
+
+### Upgrading
+
+- A request to another origin that relied on receiving the token needs that
+  origin in `authOrigins`.
+- `addToUrl: ["a/b"]` used to produce two path segments; it now produces one
+  (`a%2Fb`).
+- Code that read a binary response as a string should read the `Blob`, or pass
+  `responseType: "text"`.
+
 ## 2.0.0 - 2026-08-03
 
 ### Breaking

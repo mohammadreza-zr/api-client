@@ -183,7 +183,7 @@ api.get("/users", { throwError: false });
 | `cancelToken` | `signal`, or the `cancel` option + `api.cancel()` |
 | `source.cancel()` | `api.cancel(selector)` / `scope.cancel()` |
 | `axios.isCancel(e)` | `e.canceled` |
-| `responseType` | automatic (JSON, text, or undefined) |
+| `responseType` | `responseType` (`"auto"` default: JSON, text, or a `Blob` for binary) |
 | `maxRedirects` | `redirect` |
 | `transformRequest` | `beforeFunc` |
 | `transformResponse` | `afterFunc` |

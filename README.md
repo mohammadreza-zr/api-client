@@ -43,7 +43,7 @@ Verified, including the rows where this library loses.
 | | axios | ky | @mrzr/api-client |
 |---|---|---|---|
 | Zero runtime dependencies | ✗ | ✓ | ✓ |
-| Bundle, min+gzip | ~14 KB | **~4 KB** | 13.4 KB |
+| Bundle, min+gzip | ~14 KB | **~4 KB** | 16.8 KB |
 | Built on | XHR / node:http | fetch | fetch |
 | Retry with backoff | via `axios-retry` | **✓ built in** | ✗ *(not yet)* |
 | Interceptors / hooks | **✓ global** | **✓ global** | per-request transforms |
@@ -56,7 +56,7 @@ Verified, including the rows where this library loses.
 
 Two honest notes on that table:
 
-- **Size.** 13.4 KB is axios-territory and 3× ky. About 3.8 KB of it is the inlined worker, which ships even when you pass `worker: false` — a runtime flag can't be tree-shaken away. Worth knowing before you install.
+- **Size.** 16.8 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even when you pass `worker: false`: a runtime flag can't be tree-shaken away. Worth knowing before you install.
 - **Retry.** Not implemented. It has to interact correctly with refresh-and-retry, cancellation and `takeLatest`, and shipping it half-right would be worse than not shipping it.
 
 ---
@@ -65,7 +65,7 @@ Two honest notes on that table:
 
 - **Coalesced refresh** — 50 simultaneous 401s trigger exactly **one** refresh call. A shared promise, not a polling loop
 - **Web Worker isolation** — requests run in a worker by default, so tokens never enter the main-thread heap. Self-disables on the server or where `Worker` is missing
-- **Cross-tab sync** — login, logout and refresh propagate over `BroadcastChannel`, with leader election so one tab drives
+- **Cross-tab sync** — login, logout and refresh propagate over `BroadcastChannel`, and tabs take turns refreshing (Web Locks), so a rotating refresh token is never spent twice
 - **httpOnly cookie mode** — including `restoreSession()`, which answers the "am I logged in?" question that cookies make unanswerable from JS
 - **Opt-in cancellation** — cancel by URL pattern, scope or key on page change or modal close; real aborts, worker mode included
 - **Real upload support** — `FormData`, `File`, `Blob`, typed arrays and streams, with refresh handled mid-upload
@@ -491,7 +491,8 @@ Full guide, with copy-paste recipes for React, Next, Vue, Svelte, Angular, TanSt
 
 | Option | Default | Description |
 |---|---|---|
-| `baseUrl` | auto-detected | Falls back to `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BASE_URL`, `VITE_API_URL`, `VITE_BASE_URL`, `NUXT_PUBLIC_API_URL`, `PUBLIC_API_URL`, `API_URL`, or `globalThis.__API_BASE_URL__`. Works in the browser, on the server, and in worker mode |
+| `baseUrl` | auto-detected | Falls back to an env variable ([list](https://github.com/mohammadreza-zr/api-client/wiki/Client-Options#baseurl-auto-detection)), then the page origin in a browser. On the server with neither, requests fail with a message saying what to set |
+| `authOrigins` | `[]` | Extra origins allowed to receive the access token and CSRF header. The `baseUrl` origin is always allowed |
 | `timeout` | `30000` | Per-request timeout in ms |
 | `throwError` | `true` | Reject with `ApiError` on failure. Set `false` for the never-throwing envelope. Overridable per request |
 | `headers` | `{}` | Merged into every request |

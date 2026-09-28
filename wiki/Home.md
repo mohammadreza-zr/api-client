@@ -42,7 +42,7 @@ Including the rows where this library loses.
 | | axios | ky | @mrzr/api-client |
 |---|---|---|---|
 | Zero runtime dependencies | ✗ | ✓ | ✓ |
-| Bundle, min+gzip | ~14 KB | **~4 KB** | 13.4 KB |
+| Bundle, min+gzip | ~14 KB | **~4 KB** | 16.8 KB |
 | Built on | XHR / node:http | fetch | fetch |
 | Retry with backoff | via `axios-retry` | **✓ built in** | ✗ *(not yet)* |
 | Interceptors / hooks | **✓ global** | **✓ global** | per-request transforms |
@@ -53,7 +53,7 @@ Including the rows where this library loses.
 | **Cancel by URL pattern / scope** | ✗ | ✗ | **✓** |
 | CSRF double-submit | partial | ✗ | ✓ |
 
-- **Size.** 13.4 KB is axios-territory and 3× ky. ~3.8 KB of it is the inlined worker, which ships even with `worker: false` — a runtime flag can't be tree-shaken.
+- **Size.** 16.8 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even with `worker: false` — a runtime flag can't be tree-shaken.
 - **Retry.** Not implemented. It has to interact correctly with refresh-and-retry, cancellation and `takeLatest`; shipping it half-right would be worse than not shipping it.
 
 ---
@@ -64,7 +64,7 @@ Including the rows where this library loses.
 |---|---|
 | **Coalesced refresh** | 50 simultaneous 401s trigger exactly **one** refresh call — a shared promise, not a polling loop. |
 | **Worker isolation** | Requests run in a Web Worker by default, so tokens never enter the main-thread heap. |
-| **Cross-tab sync** | Login, logout and refresh propagate over `BroadcastChannel`, with leader election. |
+| **Cross-tab sync** | Login, logout and refresh propagate over `BroadcastChannel`; tabs take turns refreshing through a Web Lock. |
 | **httpOnly cookie mode** | Including `restoreSession()`, which answers the "am I logged in?" question cookies make unanswerable from JS. |
 | **Opt-in cancellation** | Cancel by URL pattern, scope or key on page change or modal close. Real aborts, worker mode included. |
 | **Real upload support** | `FormData`, `File`, `Blob`, `ArrayBuffer`, typed arrays and `ReadableStream`, with refresh handled mid-upload. |
@@ -110,7 +110,7 @@ Failures reject with a typed `ApiError`, which is what Query and SWR need to mar
 
 ### Advanced
 - **[[Web Worker Isolation]]** — how it works, what it protects, when it disables itself
-- **[[Multi-Tab Sync]]** — BroadcastChannel, leader election
+- **[[Multi-Tab Sync]]** — BroadcastChannel, cross-tab refresh lock
 - **[[Logging and Observability]]** — `log`, `onLog`, `onError`
 - **[[Security Model]]** — the threat model, honestly stated
 
