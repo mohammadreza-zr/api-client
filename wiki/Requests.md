@@ -46,6 +46,8 @@ await api.get("/users/{id}/posts/{postId}", {
 
 Every occurrence of `{key}` is replaced. This is the clearest way to build resource URLs and it keeps the route readable in logs.
 
+Values are URL-encoded as a single path segment, so user input can't change the route: `{ id: "1/../admin?x=" }` becomes `/users/1%2F..%2Fadmin%3Fx%3D`, not `/admin?x=`. Substitution is single-pass: a value that itself contains `{postId}` is left as text.
+
 ### `addToUrl` — appended path segments
 
 ```ts
@@ -53,7 +55,7 @@ await api.get("/users", { addToUrl: [42, "posts"] });
 // → /users/42/posts/
 ```
 
-Note the **trailing slash** — this style targets Django-REST-style APIs. If you don't want it, use `addTemplateToUrl` or plain string interpolation.
+Each segment is URL-encoded, so `"a/b"` stays one segment (`a%2Fb`). Note the **trailing slash** — this style targets Django-REST-style APIs. If you don't want it, use `addTemplateToUrl` or plain string interpolation.
 
 > **Falsy segments throw.** `addToUrl: [userId]` with `userId === undefined` raises
 > `addToUrl contains a falsy segment at index 0: [null]`.

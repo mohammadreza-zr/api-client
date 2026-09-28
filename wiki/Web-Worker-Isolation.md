@@ -63,7 +63,8 @@ Worker mode is skipped — silently, falling back to the identical main-thread i
 | `Worker`, `Blob` or `URL.createObjectURL` missing | Unsupported runtime |
 | `extractTokens` supplied | Functions can't be structured-cloned |
 | `buildRefreshBody` supplied | Same |
-| Worker construction throws (CSP blocks `blob:`) | Caught, falls back |
+| Worker construction throws | Caught, falls back |
+| Worker fails to boot (CSP blocks `blob:` — browsers report it asynchronously — or it doesn't start within 10 s) | Requests switch to the main thread; `isWorker` becomes `false` |
 
 Always check what you actually got:
 
@@ -79,7 +80,7 @@ Blob workers need:
 Content-Security-Policy: worker-src 'self' blob:;
 ```
 
-Older browsers fall back to `child-src blob:`. Without it, `new Worker(blobUrl)` throws, the client catches it, and you get the main-thread path with no error.
+Older browsers fall back to `child-src blob:`. Without it the worker never starts: whether the browser throws from `new Worker(blobUrl)` or reports the block later through `onerror`, the client switches to the main-thread path with no error, and `api.isWorker` reads `false` from then on.
 
 ---
 

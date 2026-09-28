@@ -27,15 +27,7 @@ const check = (name, cond, detail = "") => {
   }
 };
 
-const ENV_KEYS = [
-  "NEXT_PUBLIC_API_URL",
-  "NEXT_PUBLIC_BASE_URL",
-  "VITE_API_URL",
-  "VITE_BASE_URL",
-  "NUXT_PUBLIC_API_URL",
-  "PUBLIC_API_URL",
-  "API_URL",
-];
+const { createClient, BASE_URL_KEYS: ENV_KEYS } = await import("../dist/index.js");
 
 function clearEnv() {
   for (const key of ENV_KEYS) delete process.env[key];
@@ -46,7 +38,6 @@ function clearEnv() {
 }
 
 const { server } = await start(4601);
-const { createClient } = await import("../dist/index.js");
 
 /** Detection happens in the constructor, so each case needs a fresh client. */
 async function resolvedBaseUrl(options = {}) {
@@ -107,9 +98,28 @@ try {
   const bare = createClient({ worker: false, multiTab: false, throwError: false });
   const relative = await bare.get("/echo");
   check("relative URL with no baseUrl fails instead of hanging", relative.status === false);
+  check(
+    "the failure tells a first-time user what to set",
+    /No base URL/.test(relative.message) && relative.message.includes("createClient({ baseUrl") && relative.message.includes("VITE_API_URL"),
+    relative.message,
+  );
   const absolute = await bare.get(`${BASE}/echo`);
   check("absolute URLs work with no baseUrl", absolute.status === true);
   bare.destroy();
+
+  clearEnv();
+  globalThis.location = { href: `${BASE}/app/page`, origin: BASE, protocol: "http:" };
+  check("in a browser, no configuration defaults to the page origin", (await resolvedBaseUrl()) === BASE);
+  check("a relative baseUrl resolves against the page", (await resolvedBaseUrl({ baseUrl: "/" })) === BASE);
+  process.env.NEXT_PUBLIC_API_URL = "http://127.0.0.1:9/wrong";
+  check('baseUrl "" means the page origin, and beats env detection', (await resolvedBaseUrl({ baseUrl: "" })) === BASE);
+  delete globalThis.location;
+
+  clearEnv();
+  const noScheme = createClient({ baseUrl: "localhost:4601", worker: false, multiTab: false, throwError: false });
+  const schemeless = await noScheme.get("/echo");
+  check('a baseUrl without "http://" says so', schemeless.message.includes('need "http://" or "https://"'), schemeless.message);
+  noScheme.destroy();
 
   console.log("\ntrailing slashes");
 

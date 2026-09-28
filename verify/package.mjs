@@ -64,6 +64,11 @@ try {
     "dist/index.cjs",
     "dist/index.d.ts",
     "dist/index.d.cts",
+    "dist/services.js",
+    "dist/services.cjs",
+    "dist/services.d.ts",
+    "dist/services.d.cts",
+    "services/package.json",
     "package.json",
     "README.md",
     "LICENSE",
@@ -113,6 +118,21 @@ try {
      api.destroy();`,
   );
   const esmOut = JSON.parse(run("node", [esmProbe], consumer).trim());
+
+  const pluginProbe = join(consumer, "plugin.mjs");
+  writeFileSync(
+    pluginProbe,
+    `import { createClient } from "@mrzr/api-client";
+     import { services } from "@mrzr/api-client/services";
+     const api = createClient({ baseUrl: "http://x", worker: false, multiTab: false,
+       plugins: [services({ files: "http://files.x" })] });
+     console.log(JSON.stringify({ ok: api.service("files").name === "files" }));
+     api.destroy();`,
+  );
+  check("the services plugin resolves via its subpath export", JSON.parse(run("node", [pluginProbe], consumer).trim()).ok === true);
+  const pluginCjs = join(consumer, "plugin.cjs");
+  writeFileSync(pluginCjs, `const { services } = require("@mrzr/api-client/services"); console.log(JSON.stringify({ ok: typeof services === "function" }));`);
+  check("…and via require()", JSON.parse(run("node", [pluginCjs], consumer).trim()).ok === true);
   check("ESM import works via the package name", esmOut.ok === true);
   check("named utility exports resolve", esmOut.base === "string");
 
@@ -126,7 +146,11 @@ try {
   );
   check("CJS require works via the package name", JSON.parse(run("node", [cjsProbe], consumer).trim()).ok === true);
 
-  const dts = readFileSync(join(installed, "dist/index.d.ts"), "utf8");
+  // Entry points share one declaration chunk, so scan every shipped .d.ts.
+  const dts = readdirSync(join(installed, "dist"))
+    .filter((file) => file.endsWith(".d.ts"))
+    .map((file) => readFileSync(join(installed, "dist", file), "utf8"))
+    .join("\n");
   check("types declare createClient", /declare function createClient/.test(dts));
   check("types declare ClientOptions.storage", /storage\?:/.test(dts));
 

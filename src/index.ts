@@ -7,6 +7,7 @@
 
 export { createClient } from "./client";
 export type { ApiClient } from "./client";
+export type { ApiPlugin, PluginExtensions, PluginRequest } from "./plugin";
 
 export { ApiError } from "./types";
 export type {
@@ -26,6 +27,8 @@ export type {
   PendingRequest,
   RefreshBodyConfig,
   RequestConfig,
+  ResponseFormat,
+  SocketTokenOptions,
   StorageKind,
   TokenExtractor,
   TokenFieldMap,

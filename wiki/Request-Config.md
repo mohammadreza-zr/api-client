@@ -13,9 +13,9 @@ await api.get<User>("/users/{id}", { /* RequestConfig<User> */ });
 | Option | Type | Default | Purpose |
 |---|---|---|---|
 | **URL** ||||
-| `baseUrl` | `string` | client `baseUrl` | Override the base for this call |
-| `addToUrl` | `(string \| number)[]` | – | Append path segments, with a trailing slash |
-| `addTemplateToUrl` | `Record<string, string \| number>` | – | Replace `{key}` placeholders |
+| `baseUrl` | `string` | client `baseUrl` | Override the base for this call. The token is only attached if its origin is the client's or in `authOrigins` |
+| `addToUrl` | `(string \| number)[]` | – | Append path segments, each URL-encoded, with a trailing slash |
+| `addTemplateToUrl` | `Record<string, string \| number>` | – | Replace `{key}` placeholders with URL-encoded values |
 | `params` | `Params<T>` | – | Query string; nested objects and arrays supported |
 | **Headers & body** ||||
 | `headers` | `Record<string, string>` | – | Merged over the client headers |
@@ -23,7 +23,7 @@ await api.get<User>("/users/{id}", { /* RequestConfig<User> */ });
 | `isFormData` | `boolean` | auto | Force multipart handling (drops `Content-Type`) |
 | `duplex` | `"half"` | `"half"` | Set automatically for `ReadableStream` bodies |
 | **Timing** ||||
-| `timeout` | `number` | `30000` | Per-attempt timeout in ms; `0` disables |
+| `timeout` | `number` | `30000` | Per-attempt timeout in ms, covering the body download; `0` disables |
 | `signal` | `AbortSignal` | – | Your cancellation signal, merged with the timeout |
 | **Cancellation** ||||
 | `cancelable` | `boolean` | client setting | Track this request so `cancel()` can stop it |
@@ -36,9 +36,10 @@ await api.get<User>("/users/{id}", { /* RequestConfig<User> */ });
 | `refreshTokenCheck` | `boolean` | `true` | `false` disables the 401 → refresh → retry flow |
 | `uploadSkewMs` | `number` | – | Refresh before sending if the token dies within this window |
 | **Response shaping** ||||
-| `fullData` | `boolean` | `false` | Return the raw body instead of unwrapping `{ data }` |
-| `beforeSelectOptions` | `(data: T) => unknown` | – | Transform the payload; runs before `afterFunc` |
-| `afterFunc` | `(data: T) => unknown` | – | Transform the payload |
+| `responseType` | `"auto" \| "json" \| "text" \| "blob" \| "arrayBuffer"` | `"auto"` | How to read the body. `"auto"` parses JSON, reads textual types as text, and returns anything else as a `Blob` |
+| `fullData` | `boolean` | `false` | Return the raw body instead of unwrapping `{ data }` (the whole body is on `res.body` either way) |
+| `beforeSelectOptions` | `(data: T) => unknown` | – | Transform the payload on success; runs before `afterFunc` |
+| `afterFunc` | `(data: T) => unknown` | – | Transform the payload on success |
 | `beforeFunc` | `(body: unknown) => unknown` | – | Transform the outgoing body |
 | **Errors & logging** ||||
 | `throwError` | `boolean` | client setting | Reject with `ApiError`, or resolve with the envelope |

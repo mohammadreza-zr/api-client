@@ -15,7 +15,10 @@ const api = createClient({ /* ClientOptions */ });
 | Option | Type | Default | Description |
 |---|---|---|---|
 | **Connection** ||||
-| `baseUrl` | `string` | auto-detected | Prefix for relative URLs. Trailing slashes are normalized |
+| `baseUrl` | `string` | auto-detected | Prefix for relative URLs. Trailing slashes are normalized. See below |
+| `plugins` | `ApiPlugin[]` | `[]` | Optional add-ons, applied in order. See [[Plugins]] |
+| `exposeTokens` | `boolean` | `false` | Allow `api.getAccessToken()`, for a socket server that accepts the API token. Lets page code read the token; prefer `getSocketToken`. See [[WebSockets and Socket.io]] |
+| `authOrigins` | `string[]` | `[]` | Extra origins allowed to receive the access token and CSRF header. The `baseUrl` origin and the page's own origin are always allowed; every other URL is sent without them. URLs are resolved the way `fetch` resolves them before the check, so `//host`, `\\host` and `/\host` count as that host |
 | `timeout` | `number` | `30000` | Per-attempt timeout in ms; `0` disables |
 | `headers` | `Record<string, string>` | `{}` | Merged into every request |
 | `credentials` | `RequestCredentials` | per `authMode` | `"same-origin"`, or `"include"` in cookie mode |
@@ -37,7 +40,7 @@ const api = createClient({ /* ClientOptions */ });
 | **CSRF** ||||
 | `xsrfCookieName` | `string` | – | Cookie holding the CSRF token |
 | `xsrfHeaderName` | `string` | `"X-CSRF-Token"` | Header to mirror it into |
-| `getCsrfToken` | `() => string \| undefined` | – | Supply the token directly. Takes precedence |
+| `getCsrfToken` | `() => string \| undefined \| Promise<…>` | – | Supply the token directly. Takes precedence |
 | **Cancellation** ||||
 | `cancel` | `boolean \| CancelOptions` | `false` | Opt in to cancellation. See [[Cancellation]] |
 | **Execution** ||||
@@ -53,12 +56,20 @@ const api = createClient({ /* ClientOptions */ });
 When omitted, the first environment variable that is set wins, in this order:
 
 1. `NEXT_PUBLIC_API_URL`
-2. `NEXT_PUBLIC_BASE_URL`
-3. `VITE_API_URL`
-4. `VITE_BASE_URL`
-5. `NUXT_PUBLIC_API_URL`
-6. `PUBLIC_API_URL`
-7. `API_URL`
+2. `NEXT_PUBLIC_API_BASE_URL`
+3. `NEXT_PUBLIC_BASE_URL`
+4. `VITE_API_URL`
+5. `VITE_API_BASE_URL`
+6. `VITE_BASE_URL`
+7. `NUXT_PUBLIC_API_URL`
+8. `REACT_APP_API_URL`
+9. `EXPO_PUBLIC_API_URL`
+10. `PUBLIC_API_URL`
+11. `PUBLIC_API_BASE_URL`
+12. `API_URL`
+13. `API_BASE_URL`
+
+Vite's own `BASE_URL` is deliberately not read: it is the app's public path, not an API.
 
 Each name is read from, in order:
 
@@ -68,7 +79,7 @@ Each name is read from, in order:
 4. `import.meta.env` at runtime (Vite dev and SSR)
 5. `globalThis.__VITE_ENV__`, `globalThis.__ENV__`, `globalThis.ENV` — for hand-injected runtime config
 
-If none is set, `baseUrl` is `""` and relative URLs resolve against the current origin.
+If none is set, `baseUrl` is the page origin in a browser or worker. On the server (Node, SSR, tests) there is no page, so a request to a relative path fails with a message naming the option and these variables — rather than guessing a host. A relative `baseUrl` such as `"/api"` is resolved against the page, and `baseUrl: ""` means the page origin itself (it also switches env detection off). A `baseUrl` written without its scheme, such as `"localhost:4000"`, fails with a message asking for `http://` or `https://`.
 
 > Detection must use *literal* `process.env.FOO` reads, because bundlers inline env vars by replacing that exact text. A dynamic `process.env[key]` lookup is invisible to that pass, and browser bundles have no `process` at all — which is why auto-detection silently produced `""` in the browser before v1.0.2.
 
@@ -245,6 +256,8 @@ createClient({
 
 ### Multiple APIs in one app
 
+When the APIs share one login, use the [`services` plugin](Plugins): one client, one session, `api.service("files").get(...)`. When they need separate logins, create separate clients:
+
 ```ts
 export const mainApi = createClient({
   baseUrl: "https://api.example.com",
@@ -260,5 +273,14 @@ export const analyticsApi = createClient({
 ```
 
 Distinct `storageKey`s keep their tokens and tab channels independent.
+
+To send one client's token to a second origin you own, list it instead:
+
+```ts
+export const api = createClient({
+  baseUrl: "https://api.example.com",
+  authOrigins: ["https://files.example.com"],
+});
+```
 
 Next: **[[API Reference]]**

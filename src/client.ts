@@ -3,16 +3,28 @@ import type {
   CancelScope,
   CancelSelector,
   ClientOptions,
+  HttpMethod,
   IRes,
   PendingRequest,
   RequestConfig,
+  SocketTokenOptions,
   TokenPair,
 } from "./types";
 import { ApiError } from "./types";
 import { CoreClient } from "./internal/core-client";
-import { hasWorker, isServer, isWorkerScope } from "./internal/env";
+import { extractSocketToken } from "./internal/extract";
+import { storageFor } from "./internal/storage";
+import { hasWorker, isServer, isWorkerScope, resolveBaseUrl } from "./internal/env";
 import { WorkerHost } from "./worker/worker-host";
 import { WORKER_SOURCE } from "./worker/worker-source";
+import {
+  configureWith,
+  extendWith,
+  sendThrough,
+  type ApiPlugin,
+  type PluginExtensions,
+  type PluginRequest,
+} from "./plugin";
 
 /**
  * The client returned by `createClient`.
@@ -45,6 +57,31 @@ export interface ApiClient {
    * the session intact — a blip is not a logout.
    */
   refresh(): Promise<boolean>;
+
+  /**
+   * Asks your server for a WebSocket / socket.io credential and returns it.
+   *
+   * The request is an ordinary authenticated call (token attached, refreshed
+   * on 401), so the access token itself never leaves the worker. The response
+   * may be the token as a string, or `{ token }`, `{ ticket }` or
+   * `{ socketToken }`, optionally wrapped in `{ data }`. Rejects with an
+   * `ApiError` when the call fails or the response carries no token.
+   *
+   * ```ts
+   * const socket = io(URL, {
+   *   auth: async (cb) => cb({ token: await api.getSocketToken("/auth/socket-ticket") }),
+   * });
+   * ```
+   */
+  getSocketToken(url: string, options?: SocketTokenOptions): Promise<string>;
+
+  /**
+   * The current access token, refreshed first when it is about to expire —
+   * for a socket server that accepts the API token itself. Requires
+   * `exposeTokens: true` (rejects otherwise); resolves `undefined` when there
+   * is no usable token, and always in cookie mode, where the token is httpOnly.
+   */
+  getAccessToken(): Promise<string | undefined>;
 
   /** Current auth state. Never contains tokens. */
   getAuthState(): Promise<AuthState>;
@@ -141,6 +178,7 @@ type Implementation = Pick<
   | "logout"
   | "setTokens"
   | "refresh"
+  | "getAccessToken"
   | "getAuthState"
   | "restoreSession"
   | "onAuthStateChange"
@@ -150,6 +188,8 @@ type Implementation = Pick<
 > & {
   /** Resolves `throwOnCancel` for a config, using the client-wide default. */
   shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean;
+  /** Whether requests run in a worker right now; absent means never. */
+  readonly usesWorker?: boolean;
 };
 
 /**
@@ -168,7 +208,11 @@ type Implementation = Pick<
  * const { data, status } = await api.get<User[]>("/users");
  * ```
  */
-export function createClient(options: ClientOptions = {}): ApiClient {
+export function createClient<const P extends readonly ApiPlugin[] = []>(
+  clientOptions: ClientOptions & { plugins?: P } = {},
+): ApiClient & PluginExtensions<P> {
+  const plugins = clientOptions.plugins ?? [];
+  const options = configureWith(plugins, clientOptions);
   const wantsWorker = options.worker !== false;
   const canUseWorker =
     wantsWorker &&
@@ -187,19 +231,31 @@ export function createClient(options: ClientOptions = {}): ApiClient {
     typeof options.extractTokens !== "function" &&
     typeof options.buildRefreshBody !== "function";
 
+  let impl: Implementation | undefined;
   if (canUseWorker) {
     try {
-      return wrap(new WorkerHost(options), true, options);
+      impl = new WorkerHost(options);
     } catch {
       // Blob workers are blocked by some CSPs — fall back silently.
     }
   }
+  impl ??= new CoreClient({ ...options, baseUrl: resolveBaseUrl(options.baseUrl) }, storageFor(options));
 
-  return wrap(new CoreClient(options), false, options);
+  const client = wrap(impl, options, plugins);
+  extendWith(client, plugins);
+  return client as ApiClient & PluginExtensions<P>;
+}
+
+/** Calls the implementation's verb for a request that may have been rewritten by plugins. */
+function dispatch(impl: Implementation, { method, url, body, config }: PluginRequest): Promise<IRes<unknown>> {
+  if (method === "GET") return impl.get(url, config);
+  if (method === "DELETE") return impl.delete(url, config);
+  const verb = method.toLowerCase() as Lowercase<Exclude<HttpMethod, "GET" | "DELETE">>;
+  return impl[verb](url, body, config);
 }
 
 /** Applies `throwError` uniformly on top of either implementation. */
-function wrap(impl: Implementation, isWorker: boolean, options: ClientOptions): ApiClient {
+function wrap(impl: Implementation, options: ClientOptions, plugins: readonly ApiPlugin[]): ApiClient {
   // Throwing by default is what react-query, SWR and Vue Query expect.
   const throwByDefault = options.throwError !== false;
 
@@ -227,27 +283,52 @@ function wrap(impl: Implementation, isWorker: boolean, options: ClientOptions): 
     return result;
   };
 
+  const call = <R>(method: HttpMethod, url: string, body: unknown, config?: RequestConfig<R>): Promise<IRes<R>> => {
+    const request: PluginRequest = { method, url, body, config: config as RequestConfig<unknown> | undefined };
+    const run = plugins.length ? sendThrough(plugins, request, (r) => dispatch(impl, r)) : dispatch(impl, request);
+    return guard(() => run as Promise<IRes<R>>, config);
+  };
+
   const client: ApiClient = {
-    get: (url, config) => guard(() => impl.get(url, config), config),
-    post: (url, body, config) => guard(() => impl.post(url, body, config), config),
-    put: (url, body, config) => guard(() => impl.put(url, body, config), config),
-    patch: (url, body, config) => guard(() => impl.patch(url, body, config), config),
-    delete: (url, config) => guard(() => impl.delete(url, config), config),
+    get: (url, config) => call("GET", url, undefined, config),
+    post: (url, body, config) => call("POST", url, body, config),
+    put: (url, body, config) => call("PUT", url, body, config),
+    patch: (url, body, config) => call("PATCH", url, body, config),
+    delete: (url, config) => call("DELETE", url, undefined, config),
     login: (body, config) => guard(() => impl.login(body, config), config),
     logout: (config) => impl.logout(config),
     setTokens: (tokens) => impl.setTokens(tokens),
     refresh: () => impl.refresh(),
+    getSocketToken: (url, options) => requestSocketToken(client, url, options),
+    getAccessToken: () => impl.getAccessToken(),
     getAuthState: () => impl.getAuthState(),
     restoreSession: (url) => impl.restoreSession(url),
     onAuthStateChange: (listener) => impl.onAuthStateChange(listener),
     cancel: (selector, reason) => impl.cancel(selector, reason),
     pending: (selector) => impl.pending(selector),
     cancelScope: (name) => createScope(client, name),
-    isWorker,
+    // A getter: a worker blocked at boot falls back to the page after creation.
+    get isWorker() {
+      return impl.usesWorker ?? false;
+    },
     destroy: () => impl.destroy(),
   } as ApiClient;
 
   return client;
+}
+
+/** Runs the ticket request through the public client, so it behaves like any other call. */
+async function requestSocketToken(client: ApiClient, url: string, options: SocketTokenOptions = {}): Promise<string> {
+  const { method = "POST", ...config } = options;
+  const strict = { ...config, throwError: true, throwOnCancel: true };
+  const res = method === "GET" ? await client.get(url, strict) : await client.post(url, undefined, strict);
+  const token = extractSocketToken(res.data);
+  if (token) return token;
+  throw new ApiError({
+    ...res,
+    status: false,
+    message: `No socket token in the response from ${url}: expected a string, or { token | ticket | socketToken }.`,
+  });
 }
 
 /** Counter behind auto-generated scope names, so anonymous scopes stay distinct. */

@@ -51,14 +51,13 @@ api.onAuthStateChange(async (state) => {
 
 ## Messages
 
-Four message types cross the channel. **None carries a token.**
+Three message types cross the channel. **None carries a token.**
 
 ```ts
 type TabMessage =
   | { type: "login";     tabId: string; expiresAt: number | null }
   | { type: "refreshed"; tabId: string; expiresAt: number | null }
-  | { type: "logout";    tabId: string }
-  | { type: "claim";     tabId: string; at: number };
+  | { type: "logout";    tabId: string };
 ```
 
 Booleans, timestamps and a random tab id — that's it. A compromised tab learns nothing it doesn't already have.
@@ -73,33 +72,32 @@ Each tab ignores its own messages, matched on `tabId`.
 |---|---|
 | `logout` | Clear tokens locally, fire `onAuthFailure` |
 | `login` / `refreshed` | Re-hydrate from shared storage, then emit `AuthState` |
-| `claim` | Record the earliest claim to decide leadership |
 
-Re-hydration is why storage kind matters: with `"local"` or `"cookie"` the other tab genuinely picks up the rotated tokens. With `"memory"` or `"session"` there's nothing shared to re-read, so tabs stay independent apart from logout — which still propagates, because clearing needs no shared value.
+Re-hydration is why storage kind matters: with `"local"` or `"cookie"` the other tab genuinely picks up the rotated tokens. With `"memory"` or `"session"` there's nothing shared to re-read, so each tab has its own session. An explicit `logout()` still signs every tab out. A failed refresh does not: it only ends that tab's own session, since the others never shared it.
 
-| Storage | Logout propagates | Refreshed tokens propagate |
-|---|---|---|
-| `"memory"` | ✅ | ❌ (nothing shared) |
-| `"session"` | ✅ | ❌ (per-tab) |
-| `"local"` | ✅ | ✅ |
-| `"cookie"` | ✅ | ✅ |
+| Storage | `logout()` propagates | A rejected refresh propagates | Refreshed tokens propagate |
+|---|---|---|---|
+| `"memory"` | ✅ | ❌ (independent sessions) | ❌ (nothing shared) |
+| `"session"` | ✅ | ❌ (per-tab) | ❌ (per-tab) |
+| `"local"` | ✅ | ✅ | ✅ |
+| `"cookie"` | ✅ | ✅ | ✅ |
 
 In `authMode: "cookie"` the browser already holds the rotated httpOnly cookie, so every tab is current by construction.
 
 ---
 
-## Leader election
+## Tabs take turns refreshing
 
-When several tabs need to refresh at once, one should drive it. Before refreshing, a tab posts a `claim` with a timestamp. The **earliest** claim wins; ties break on the lexicographically smaller `tabId`, so the outcome is deterministic.
+With a rotating refresh token, two tabs refreshing at once would present the same token twice; the server reads that as reuse and revokes the session. So refreshes are serialized across tabs with the [Web Locks API](https://developer.mozilla.org/docs/Web/API/Web_Locks_API) (`navigator.locks`, available in windows and workers):
 
 ```
-tab A ── claim(t=100) ──▶
-tab B ── claim(t=103) ──▶
-tab C ── claim(t=101) ──▶
-                          → A leads
+tab A ── lock ── refresh → new pair saved ── unlock
+tab B ── wait ─────────────────────────────── lock ── sees A's new pair → adopts it, no request
 ```
 
-This is deliberately **best-effort**: every tab still awaits its own refresh call. Election reduces stampede in the common case, but a tab that loses the election isn't blocked — so if the leader is killed mid-flight (tab closed, throttled by the browser), the others still recover on their own. Correctness never depends on the election succeeding.
+Once it holds the lock, a tab first checks whether a sibling already refreshed while it waited — a newer refresh token in shared storage, or in cookie mode a sibling's `refreshed` message — and adopts that result instead of spending the token again. The winning tab persists its new tokens before releasing the lock, so the next tab always sees them.
+
+The browser releases a lock when its tab closes, so a tab killed mid-refresh never blocks the others. Where Web Locks is missing, or `multiTab` is off, each tab simply refreshes on its own.
 
 Within a single tab, refresh coalescing is exact: `AuthStore.coalesceRefresh` guarantees one call. See [[Token Refresh]].
 
@@ -177,6 +175,6 @@ const channel = new BroadcastChannel("apiclient.auth");
 channel.onmessage = (e) => console.log("tab message:", e.data);
 ```
 
-You'll see the `claim`, `login`, `refreshed` and `logout` traffic — and confirm for yourself that no token ever appears in it.
+You'll see the `login`, `refreshed` and `logout` traffic — and confirm for yourself that no token ever appears in it.
 
 Next: **[[Logging and Observability]]**

@@ -14,33 +14,44 @@ npm run verify   # build + run every suite
 ```
 src/
   index.ts                  public exports — the entire API surface
-  client.ts                 createClient(); picks worker vs. main thread; applies throwError
+  client.ts                 createClient(); picks worker vs. main thread; applies throwError and plugins
+  plugin.ts                 the plugin contract (ApiPlugin) and runner
+  plugins/services.ts       the services plugin — its own entry point, @mrzr/api-client/services
   types.ts                  the public type surface + ApiError
   internal/
-    core-client.ts          the full client: auth actions, refresh, engine wiring
+    core-client.ts          the full client: auth actions, engine wiring
     engine.ts               executeRequest() — the one request pipeline
+    body.ts                 body encoding, headers, response parsing (responseType)
+    refresh.ts              the refresh flow: timeout, CSRF, cross-tab lock, sibling adoption
     cancel.ts               cancel registry, URL patterns, selectors, signal linking
-    auth-store.ts           token state, expiry, refresh coalescing, subscribers
-    broadcast.ts            BroadcastChannel tab sync + leader election
-    storage.ts              Memory/Web/Cookie adapters + resolveStorage
-    extract.ts              default token & user extractors
+    auth-store.ts           token state, expiry, session generation, refresh coalescing
+    broadcast.ts            BroadcastChannel tab sync + the cross-tab Web Lock
+    origin.ts               which origins may receive the token and CSRF header
+    cookie.ts               cookie reading, the CSRF reader
+    storage.ts              Memory/Web/Cookie adapters + storageFor
+    extract.ts              default token & user extractors, token stripping
     jwt.ts                  base64url decode, exp reading
     url.ts                  buildQueryString, templates, joining
-    env.ts                  capability detection, baseUrl discovery
+    env.ts                  capability detection, baseUrl discovery and resolution
+    result.ts               IRes constructors, cancellation marking and response transforms, shared by both modes
+    tracker.ts              a client's cancel registry and defaults, shared by both modes
+    hooks.ts                callHook(): app callbacks can never break the client
   worker/
-    worker-entry.ts         the worker's message loop
-    worker-host.ts          the main-thread proxy
+    worker-entry.ts         the worker's message loop + host bridge (storage, CSRF)
+    worker-host.ts          the main-thread proxy; in-page fallback when the worker can't boot
+    worker-channel.ts       the transport: boot, crash recovery, RPC, serving the bridge
+    host-options.ts         what crosses the boundary and what stays on the host
     worker-source.ts        AUTO-GENERATED — the inlined worker bundle
     protocol.ts             the message types
 scripts/
   build-worker.ts           bundles worker-entry into worker-source.ts
 verify/
-  run.mjs                   core engine suite      (39 assertions)
-  worker.mjs                worker parity suite    (29 assertions)
-  audit.mjs                 uploads + React Query  (31 assertions)
-  features.mjs              throwError, uploads, CSRF (22 assertions)
-  server.mjs                the test HTTP server
+  *.mjs                     the suites (table below)
+  server.mjs                the shared test HTTP server
   audit-server.mjs          the upload-inspection server
+  regressions-server.mjs    the server behind the regression suites
+  worker-harness.mjs        runs the real worker bundle in Node, for every worker-mode suite
+  check.mjs                 check/within/rejection helpers for the newer suites
 wiki/                       this documentation
 ```
 
@@ -74,17 +85,18 @@ npm run build          # both, in order
 
 Order matters: the worker must be inlined before the main bundle is built, or `dist` ships a stale worker. `scripts/build-worker.ts` guards against self-inlining by resetting `WORKER_SOURCE = ""` before bundling.
 
-`prepublishOnly` runs `npm run build`, so a publish can never ship a stale `dist`.
+The `prepare` hook runs `npm run build`, so a publish, pack or link can never ship a stale `dist` (see *Testing against a real project locally*).
 
 ---
 
 ## Verification
 
 ```bash
-npm run verify
+npm run verify     # build, every suite, then the packaging suite
+npm test           # every suite except packaging, against the current dist/
 ```
 
-Ten suites, **455 assertions**, all against real `node:http` servers — no mocked `fetch`, because the whole point is verifying real network behaviour.
+Fourteen suites and a compile-time type check, **663 assertions**, all against real `node:http` servers — no mocked `fetch`, because the whole point is verifying real network behaviour. `npm test` is the one list of suites: CI and the release workflow run it too.
 
 | Suite | Covers |
 |---|---|
@@ -97,6 +109,11 @@ Ten suites, **455 assertions**, all against real `node:http` servers — no mock
 | `cookie-auth.mjs` | httpOnly cookie mode, session restore, cross-tab propagation |
 | `cancel.mjs` | Opt-in tracking, URL patterns, keys, groups, scopes, `takeLatest` |
 | `cancel-worker.mjs` | The same, through the real worker bundle — including that the socket really closes |
+| `regressions.mjs` | The security/correctness audit: token origins, URL encoding, refresh races and timeouts, session state, binary responses, cross-tab refresh |
+| `regressions-worker.mjs` | The audit's worker-mode cases: CSRF bridge, boot fallback, destroy during boot, relative `baseUrl` |
+| `tokens.mjs` | `getSocketToken` and the opt-in `getAccessToken`, in both modes |
+| `plugins.mjs` | The plugin hooks, failure isolation and the `services` plugin, in both modes |
+| `types/plugins.ts` | Compile-time: typed plugin methods, service-name typos (run by `npm run typecheck`) |
 | `package.mjs` | Tarball contents, exports map, type resolution, the `prepare` hook |
 
 Some assertions are labelled `[documented]` — they lock in behaviour that is surprising but intentional, such as *"an envelope-style 500 looks like SUCCESS to react-query"*. Don't delete them; they're the argument for the current defaults.
@@ -107,7 +124,7 @@ Some assertions are labelled `[documented]` — they lock in behaviour that is s
 check("descriptive name", actual === expected, `got ${actual}`);
 ```
 
-Add assertions to the suite that matches the area. If you change core behaviour, add a matching assertion to `worker.mjs` too — parity is the invariant.
+Add assertions to the suite that matches the area. If you change core behaviour, add a matching assertion to `worker.mjs` too — parity is the invariant. A new suite goes into the `test` script in `package.json`, and a worker-mode suite imports `./worker-harness.mjs` before the client.
 
 ---
 
@@ -158,7 +175,7 @@ Two workflows live in `.github/workflows/`:
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | every push and pull request | lint, typecheck, build, then the `verify/` suites on Node 20, 22 and 24 |
+| `ci.yml` | every push and pull request | lint, typecheck, build and `npm test` on Node 20, 22 and 24; a packaging job checks types, the tarball and `verify/package.mjs` |
 | `release.yml` | pushing a `v*` tag | re-runs the full check matrix, then publishes to npm and opens a GitHub Release |
 
 A pull request cannot merge until `ci.yml` is green on every Node version in the matrix.

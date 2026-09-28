@@ -1,6 +1,6 @@
 {
   "name": "@mrzr/api-client",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "The HTTP layer under TanStack Query, SWR and Vue Query — it handles auth so they don't have to. Coalesced token refresh, Web Worker token isolation, cross-tab session sync. Zero dependencies.",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -17,11 +17,22 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./services": {
+      "import": {
+        "types": "./dist/services.d.ts",
+        "default": "./dist/services.js"
+      },
+      "require": {
+        "types": "./dist/services.d.cts",
+        "default": "./dist/services.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "sideEffects": false,
   "files": [
     "dist",
+    "services",
     "README.md",
     "LICENSE"
   ],
@@ -33,9 +44,10 @@
     "build:bundle": "tsup",
     "build": "npm run build:worker && npm run build:bundle",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p verify/types",
     "lint": "eslint src scripts",
-    "verify": "npm run build && node verify/run.mjs && node verify/worker.mjs && node verify/audit.mjs && node verify/features.mjs && node verify/baseurl.mjs && node verify/storage.mjs && node verify/cookie-auth.mjs && node verify/cancel.mjs && node verify/cancel-worker.mjs && node verify/package.mjs",
+    "test": "node verify/run.mjs && node verify/worker.mjs && node verify/audit.mjs && node verify/features.mjs && node verify/baseurl.mjs && node verify/storage.mjs && node verify/cookie-auth.mjs && node verify/cancel.mjs && node verify/cancel-worker.mjs && node verify/regressions.mjs && node verify/regressions-worker.mjs && node verify/tokens.mjs && node verify/plugins.mjs",
+    "verify": "npm run build && npm test && node verify/package.mjs",
     "docs:sync": "bash scripts/sync-wiki.sh",
     "prepare": "node scripts/prepare.mjs"
   },

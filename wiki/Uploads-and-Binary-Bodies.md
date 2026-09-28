@@ -21,7 +21,7 @@ These are detected and passed to `fetch` **untouched** — never `JSON.stringify
 
 ## Content-Type resolution
 
-The client applies `Content-Type: application/json` by default. For self-describing bodies that default would be a lie, so it is dropped. The precedence:
+A JSON-serialized body gets `Content-Type: application/json`, and a request without a body gets no `Content-Type` at all (so a cross-origin GET stays a simple request, with no CORS preflight). For self-describing bodies a JSON default would be a lie, so it is dropped. The precedence:
 
 1. **A per-request header always wins.**
    ```ts

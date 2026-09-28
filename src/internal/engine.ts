@@ -1,14 +1,31 @@
 import type { HttpMethod, IRes, LogEntry, RequestConfig } from "../types";
-import { cancelMessage, linkSignals, reasonOf } from "./cancel";
+import {
+  deleteHeader,
+  findHeader,
+  headersToObject,
+  isFormData,
+  isRawBody,
+  isSelfDescribingBody,
+  isSingleUseBody,
+  parseBody,
+} from "./body";
+import { linkSignals } from "./cancel";
+import { assertFetchable } from "./env";
+import { callHook } from "./hooks";
+import { isTrustedUrl, resolveRequestUrl } from "./origin";
+import { applyTransforms, emptyResult, errorMessage, markCanceled } from "./result";
 import { buildUrl } from "./url";
 
 /** Everything the engine needs from its host (main thread or worker). */
 export interface EngineContext {
   baseUrl: string;
   timeout: number;
+  /** Client-wide headers. No implicit `Content-Type`: that depends on the body. */
   defaultHeaders: Record<string, string>;
   credentials: RequestCredentials;
   authMode: "header" | "cookie";
+  /** Origins allowed to receive the access token and CSRF header. */
+  trustedOrigins: ReadonlySet<string>;
 
   /** Current access token, or `undefined` in cookie mode. */
   getAccessToken(): string | undefined;
@@ -25,11 +42,8 @@ export interface EngineContext {
    */
   shouldPreemptivelyRefresh(skewMs?: number): boolean;
 
-  /**
-   * Resolves the CSRF token to attach, when one is configured.
-   * Returns `undefined` when there is nothing to send.
-   */
-  getCsrfToken?(): string | undefined;
+  /** Resolves the CSRF token to attach, or `undefined` when there is none. */
+  getCsrfToken?(): Promise<string | undefined>;
 
   /** Header the CSRF token is sent under. */
   csrfHeaderName?: string;
@@ -53,85 +67,6 @@ export interface EngineRequest {
 }
 
 /**
- * Body types that must be passed to fetch untouched.
- *
- * `ArrayBuffer.isView` is what catches `Uint8Array`, `DataView` and every other
- * typed-array view. Without it those objects fall through to `JSON.stringify`
- * and are silently transmitted as `{"0":72,"1":105}` instead of raw bytes.
- */
-function isRawBody(body: unknown): boolean {
-  if (typeof body !== "object" || body === null) return typeof body === "string";
-  return (
-    (typeof FormData !== "undefined" && body instanceof FormData) ||
-    (typeof Blob !== "undefined" && body instanceof Blob) ||
-    (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer) ||
-    ArrayBuffer.isView(body) ||
-    (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) ||
-    (typeof ReadableStream !== "undefined" && body instanceof ReadableStream)
-  );
-}
-
-/**
- * A body that can only be sent once.
- *
- * A `ReadableStream` is consumed as it uploads, so it cannot be replayed on a
- * 401 retry — fetch rejects with "body object should not be disturbed or
- * locked". `Blob`, `FormData`, `ArrayBuffer` and strings are all re-readable
- * and retry safely.
- */
-function isSingleUseBody(body: unknown): boolean {
-  return typeof ReadableStream !== "undefined" && body instanceof ReadableStream;
-}
-
-/**
- * Bodies that carry their own content type.
- *
- * Strings are excluded on purpose: a pre-serialized JSON string is a common
- * payload and must keep the `application/json` default.
- */
-function isSelfDescribingBody(body: unknown): boolean {
-  if (typeof body !== "object" || body === null) return false;
-  return (
-    (typeof Blob !== "undefined" && body instanceof Blob) ||
-    (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer) ||
-    ArrayBuffer.isView(body) ||
-    (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) ||
-    (typeof ReadableStream !== "undefined" && body instanceof ReadableStream)
-  );
-}
-
-/**
- * Whether the caller deliberately chose a Content-Type for this request.
- *
- * A per-request header is always deliberate. A client-wide default is not: it
- * is the JSON fallback applied to every call, so a binary body should override
- * it rather than inherit it.
- */
-function contentTypeWasSetBy(config: RequestConfig<unknown>, ctx: EngineContext): boolean {
-  if (config.headers && findHeader(config.headers, "content-type") !== undefined) return true;
-  const fromClient = findHeader(ctx.defaultHeaders, "content-type");
-  // The built-in default is JSON; anything else was a conscious client choice.
-  return fromClient !== undefined && fromClient.toLowerCase() !== "application/json";
-}
-
-/** Reads a header case-insensitively. */
-function findHeader(headers: Record<string, string>, name: string): string | undefined {
-  const target = name.toLowerCase();
-  for (const key of Object.keys(headers)) {
-    if (key.toLowerCase() === target) return headers[key];
-  }
-  return undefined;
-}
-
-/** Removes a header regardless of the casing it was written with. */
-function deleteHeader(headers: Record<string, string>, name: string): void {
-  const target = name.toLowerCase();
-  for (const key of Object.keys(headers)) {
-    if (key.toLowerCase() === target) delete headers[key];
-  }
-}
-
-/**
  * `RequestInit` keys we forward from user config.
  * A whitelist, so app-level options never leak into fetch and future spec
  * additions can't silently collide.
@@ -147,12 +82,150 @@ const PASSTHROUGH: (keyof RequestInit)[] = [
   "window",
 ];
 
-function headersToObject(headers: Headers): Record<string, string> {
-  const out: Record<string, string> = {};
-  headers.forEach((value, key) => {
-    out[key.toLowerCase()] = value;
-  });
-  return out;
+/** One network attempt. `finish` must run once its body has been read. */
+interface Attempt {
+  response: Response;
+  signal: AbortSignal;
+  finish(): void;
+}
+
+/**
+ * Whether the caller deliberately chose a Content-Type for this request.
+ *
+ * A per-request header is always deliberate. A client-wide `application/json`
+ * is not — it is the generic default, so a binary body overrides it.
+ */
+function contentTypeWasSetBy(config: RequestConfig<unknown>, ctx: EngineContext): boolean {
+  if (config.headers && findHeader(config.headers, "content-type") !== undefined) return true;
+  const fromClient = findHeader(ctx.defaultHeaders, "content-type");
+  return fromClient !== undefined && fromClient.toLowerCase() !== "application/json";
+}
+
+/** Serializes the body and settles `Content-Type` to match it. */
+function encodeBody(
+  body: unknown,
+  headers: Record<string, string>,
+  config: RequestConfig<unknown>,
+  ctx: EngineContext,
+): BodyInit | undefined {
+  if (body === undefined || body === null) {
+    // A body-less request with Content-Type forces a CORS preflight for nothing.
+    if (!config.headers || findHeader(config.headers, "content-type") === undefined) {
+      deleteHeader(headers, "content-type");
+    }
+    return undefined;
+  }
+
+  const raw = isRawBody(body) || config.isFormData || config.stringifyBody === false;
+  if (config.isFormData === true || isFormData(body)) {
+    // The runtime generates the multipart boundary; a hand-written type without one corrupts the request.
+    const explicit = findHeader(headers, "content-type");
+    if (!explicit || !explicit.includes("boundary=")) deleteHeader(headers, "content-type");
+  } else if (raw && isSelfDescribingBody(body)) {
+    // A Blob carries its `type`, URLSearchParams implies form-urlencoded.
+    if (!contentTypeWasSetBy(config, ctx)) deleteHeader(headers, "content-type");
+  } else if (findHeader(headers, "content-type") === undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+  return raw ? (body as BodyInit) : JSON.stringify(body);
+}
+
+async function buildHeaders(
+  request: EngineRequest,
+  config: RequestConfig<unknown>,
+  ctx: EngineContext,
+  trusted: boolean,
+): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { ...ctx.defaultHeaders, ...config.headers };
+
+  if (trusted && ctx.authMode === "header" && !config.skipAuth) {
+    const token = ctx.getAccessToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    else delete headers.Authorization;
+  }
+
+  // Double-submit CSRF. The backend still compares the cookie with the header.
+  const csrfHeader = ctx.csrfHeaderName;
+  if (trusted && ctx.getCsrfToken && csrfHeader && UNSAFE_METHODS.has(request.method)) {
+    if (findHeader(headers, csrfHeader) === undefined) {
+      const csrf = await ctx.getCsrfToken();
+      if (csrf) headers[csrfHeader] = csrf;
+    }
+  }
+  return headers;
+}
+
+/**
+ * Safari (WebKit bug 246069) rejects an in-flight abort with a bare
+ * "AbortError" and drops the reason, so the error cannot tell a timeout from a
+ * cancellation. The signal handed to fetch is authoritative.
+ */
+function normalizeAbort(signal: AbortSignal, error: unknown): unknown {
+  const reason = signal.reason as { name?: string } | undefined;
+  return reason?.name === "TimeoutError" ? new DOMException("Request timed out", "TimeoutError") : error;
+}
+
+async function sendAttempt(
+  request: EngineRequest,
+  finalUrl: string,
+  body: unknown,
+  ctx: EngineContext,
+): Promise<Attempt> {
+  const config = request.config ?? {};
+  const trusted = isTrustedUrl(finalUrl, ctx.trustedOrigins);
+  const headers = await buildHeaders(request, config, ctx, trusted);
+  const init: RequestInit = {
+    method: request.method,
+    headers,
+    body: encodeBody(body, headers, config, ctx),
+    credentials: ctx.credentials,
+  };
+
+  // Required by spec when streaming a request body.
+  if (isSingleUseBody(body)) {
+    (init as RequestInit & { duplex?: string }).duplex = config.duplex ?? "half";
+  }
+  for (const key of PASSTHROUGH) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- whitelisted RequestInit keys copied verbatim
+    if (config[key as keyof RequestConfig] !== undefined) (init as any)[key] = (config as any)[key];
+  }
+
+  // Every attempt gets a fresh timeout budget, covering the body download too.
+  const timeoutMs = config.timeout ?? ctx.timeout;
+  const timeoutController = new AbortController();
+  const timer =
+    timeoutMs > 0
+      ? setTimeout(() => timeoutController.abort(new DOMException("Timeout", "TimeoutError")), timeoutMs)
+      : undefined;
+  const { signal, release } = linkSignals([timeoutController.signal, config.signal, request.cancelSignal]);
+  init.signal = signal;
+
+  const finish = (): void => {
+    if (timer) clearTimeout(timer);
+    // Detach from the long-lived cancel signal, which would otherwise gain a listener per request.
+    release();
+  };
+
+  try {
+    return { response: await fetch(finalUrl, init), signal, finish };
+  } catch (error) {
+    finish();
+    throw normalizeAbort(signal, error);
+  }
+}
+
+/** Unwraps `{ data }`, keeps the envelope on `body`, and runs the caller's transforms. */
+function applyPayload(result: IRes<unknown>, parsed: unknown, config: RequestConfig<unknown>): void {
+  const envelope = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
+  result.message = typeof envelope.message === "string" ? envelope.message : "";
+  result.errors = (envelope.errors as Record<string, string[]>) ?? undefined;
+
+  result.data = parsed;
+  if (!config.fullData && envelope.data !== undefined) {
+    result.data = envelope.data;
+    result.body = parsed;
+  }
+  applyTransforms(result, config);
 }
 
 /**
@@ -162,212 +235,78 @@ function headersToObject(headers: Headers): Record<string, string> {
  * Always resolves with an `IRes`; `throwError` is applied by the caller so
  * both the worker and main-thread paths get identical semantics.
  */
-export async function executeRequest<R>(
-  request: EngineRequest,
-  ctx: EngineContext,
-): Promise<IRes<R>> {
+export async function executeRequest<R>(request: EngineRequest, ctx: EngineContext): Promise<IRes<R>> {
   const config = request.config ?? {};
   const started = Date.now();
-
-  const result: IRes<R> = {
-    statusCode: 0,
-    status: false,
-    message: "",
-    data: undefined,
-    loading: false,
-  };
-
+  const result = emptyResult<R>();
   let finalUrl = "";
 
   try {
-    finalUrl = buildUrl({
-      url: request.url,
-      baseUrl: config.baseUrl ?? ctx.baseUrl,
-      addToUrl: config.addToUrl,
-      addTemplateToUrl: config.addTemplateToUrl,
-      params: config.params as Record<string, unknown> | undefined,
-    });
+    finalUrl = resolveRequestUrl(
+      buildUrl({
+        url: request.url,
+        baseUrl: config.baseUrl ?? ctx.baseUrl,
+        addToUrl: config.addToUrl,
+        addTemplateToUrl: config.addTemplateToUrl,
+        params: config.params as Record<string, unknown> | undefined,
+      }),
+    );
+    assertFetchable(finalUrl);
 
     const body = config.beforeFunc ? config.beforeFunc(request.body) : request.body;
-
-    // A stream is consumed while uploading, so it can never be replayed.
-    const singleUse = isSingleUseBody(body);
-
-    /*
-     * Long uploads need a wider refresh window than ordinary requests.
-     *
-     * A token with 40s left passes the normal 30s check, but a 5-minute upload
-     * will still be in flight when it expires — and the retry either re-uploads
-     * the whole file or, for a stream, cannot happen at all. `uploadSkewMs`
-     * lets the caller say "this request will take a while, so refresh now".
-     */
-    const uploadSkew = config.uploadSkewMs;
-    const skew = uploadSkew !== undefined && uploadSkew > 0 ? uploadSkew : undefined;
-
-    // Refresh before we spend a round trip discovering the token is stale.
     const wantsAuth = !config.skipAuth && config.refreshTokenCheck !== false;
-    if (wantsAuth && ctx.shouldPreemptivelyRefresh(skew)) {
-      await ctx.refresh();
-    }
 
-    const send = async (): Promise<Response> => {
-      const headers: Record<string, string> = { ...ctx.defaultHeaders, ...config.headers };
+    // `uploadSkewMs` widens the window for long uploads that would outlive the token.
+    const skew = config.uploadSkewMs !== undefined && config.uploadSkewMs > 0 ? config.uploadSkewMs : undefined;
+    if (wantsAuth && ctx.shouldPreemptivelyRefresh(skew)) await ctx.refresh();
 
-      if (ctx.authMode === "header" && !config.skipAuth) {
-        const token = ctx.getAccessToken();
-        if (token) headers.Authorization = `Bearer ${token}`;
-        else delete headers.Authorization;
-      }
-
-      /*
-       * CSRF: mirror the cookie your backend set into a header.
-       *
-       * Only for state-changing methods, and never overriding a header the
-       * caller set explicitly. The backend still does the real work — it must
-       * compare the two and reject mismatches — but this makes the standard
-       * double-submit pattern a one-line client setup.
-       */
-      if (ctx.getCsrfToken && ctx.csrfHeaderName && UNSAFE_METHODS.has(request.method)) {
-        if (findHeader(headers, ctx.csrfHeaderName) === undefined) {
-          const csrf = ctx.getCsrfToken();
-          if (csrf) headers[ctx.csrfHeaderName] = csrf;
-        }
-      }
-
-      let payload: BodyInit | undefined;
-      if (body !== undefined && body !== null) {
-        const raw = isRawBody(body) || config.isFormData || config.stringifyBody === false;
-        payload = raw ? (body as BodyInit) : JSON.stringify(body);
-
-        const isFormData =
-          config.isFormData === true || (typeof FormData !== "undefined" && body instanceof FormData);
-
-        if (isFormData) {
-          // The multipart boundary is generated by the runtime; any
-          // hand-written Content-Type without one corrupts the request.
-          const explicit = findHeader(headers, "content-type");
-          if (!explicit || !explicit.includes("boundary=")) deleteHeader(headers, "content-type");
-        } else if (raw && isSelfDescribingBody(body)) {
-          // Binary and form-encoded bodies describe their own type (a Blob
-          // carries `type`, URLSearchParams implies form-urlencoded). Sending
-          // the inherited `application/json` default would mislabel them, so
-          // drop it and let fetch decide — unless the caller was explicit.
-          if (!contentTypeWasSetBy(config, ctx)) deleteHeader(headers, "content-type");
-        }
-      }
-
-      const init: RequestInit = {
-        method: request.method,
-        headers,
-        body: payload,
-        credentials: ctx.credentials,
-      };
-
-      // Required by spec when streaming a request body; omitting it makes
-      // fetch reject with "duplex option is required when sending a body".
-      if (singleUse) {
-        (init as RequestInit & { duplex?: string }).duplex = config.duplex ?? "half";
-      }
-      for (const key of PASSTHROUGH) {
-        if (config[key as keyof RequestConfig] !== undefined) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (init as any)[key] = (config as any)[key];
-        }
-      }
-
-      // Every attempt gets a fresh timeout budget.
-      const timeoutMs = config.timeout ?? ctx.timeout;
-      const timeoutController = new AbortController();
-      const timer =
-        timeoutMs > 0
-          ? setTimeout(() => timeoutController.abort(new DOMException("Timeout", "TimeoutError")), timeoutMs)
-          : undefined;
-
-      // Timeout, the caller's own signal, and the cancel registry's — first
-      // one to fire wins, and its `reason` is what reaches `applyFailure`.
-      const { signal, release } = linkSignals([
-        timeoutController.signal,
-        config.signal,
-        request.cancelSignal,
-      ]);
-      init.signal = signal;
-
-      try {
-        return await fetch(finalUrl, init);
-      } catch (error) {
-        /*
-         * Safari (WebKit bug 246069, still open in 18.x) rejects an in-flight
-         * abort with a bare "AbortError" DOMException and drops the abort
-         * reason, so `error.name` cannot tell a timeout from a cancellation
-         * there. The signal we handed to fetch is authoritative: if its abort
-         * reason is a TimeoutError, the timeout is what fired. Rethrow a clean
-         * TimeoutError so `applyFailure` reports 408 on every engine — this
-         * also covers caller-supplied `AbortSignal.timeout()` signals.
-         */
-        const reason = signal.reason as { name?: string } | undefined;
-        if (reason?.name === "TimeoutError") {
-          throw new DOMException("Request timed out", "TimeoutError");
-        }
-        throw error;
-      } finally {
-        if (timer) clearTimeout(timer);
-        // Detach from the long-lived cancel signal; a scope controller would
-        // otherwise accumulate a listener for every request it ever covered.
-        release();
-      }
-    };
-
-    let response = await send();
-
-    // 401 → refresh once → retry once.
-    if (response.status === 401 && wantsAuth) {
-      const refreshed = await ctx.refresh();
-      if (refreshed) {
-        if (singleUse) {
-          /*
-           * The stream was consumed by the first attempt, so replaying it
-           * would throw an opaque "body disturbed or locked" error from fetch.
-           * Surface something the caller can act on instead: the token *is*
-           * now fresh, so simply re-issuing the call will succeed.
-           */
+    let attempt = await sendAttempt(request, finalUrl, body, ctx);
+    try {
+      if (attempt.response.status === 401 && wantsAuth && (await ctx.refresh())) {
+        if (isSingleUseBody(body)) {
           result.statusCode = 401;
-          result.status = false;
           result.message =
             "Access token expired during a streamed upload and the stream cannot be replayed. " +
             "The token has been refreshed — retry the upload, or pass `uploadSkewMs` to refresh before starting.";
           result.error = new Error("Stream body cannot be retried after 401");
-          if (config.log) logResult(ctx, request, finalUrl, result, started);
-          return result;
+          return settle(result, ctx, request, finalUrl, started);
         }
-        response = await send();
+        attempt.finish();
+        void attempt.response.body?.cancel().catch(() => {});
+        attempt = await sendAttempt(request, finalUrl, body, ctx);
       }
-    }
 
-    result.statusCode = response.status;
-    result.status = response.ok;
-    result.headers = headersToObject(response.headers);
+      const { response } = attempt;
+      result.statusCode = response.status;
+      result.status = response.ok;
+      result.headers = headersToObject(response.headers);
 
-    const parsed = await parseBody(response);
-    const envelope = (parsed && typeof parsed === "object" ? parsed : {}) as Record<string, unknown>;
-
-    result.message = typeof envelope.message === "string" ? envelope.message : "";
-    result.errors = (envelope.errors as Record<string, string[]>) ?? undefined;
-
-    let data: unknown = parsed;
-    if (!config.fullData && envelope.data !== undefined) data = envelope.data;
-    if (config.beforeSelectOptions) data = config.beforeSelectOptions(data as never);
-    if (config.afterFunc) data = config.afterFunc(data as never);
-    result.data = data as R;
-
-    if (!response.ok && !result.message) {
-      result.message = `Request failed with status ${response.status}`;
+      let parsed: unknown;
+      try {
+        parsed = await parseBody(response, config.responseType);
+      } catch (error) {
+        throw normalizeAbort(attempt.signal, error);
+      }
+      applyPayload(result as IRes<unknown>, parsed, config);
+      if (!response.ok && !result.message) result.message = `Request failed with status ${response.status}`;
+    } finally {
+      attempt.finish();
     }
   } catch (error) {
     applyFailure(result, error);
   }
 
-  if (config.log) logResult(ctx, request, finalUrl, result, started);
+  return settle(result, ctx, request, finalUrl, started);
+}
 
+function settle<R>(
+  result: IRes<R>,
+  ctx: EngineContext,
+  request: EngineRequest,
+  finalUrl: string,
+  started: number,
+): IRes<R> {
+  if (request.config?.log) logResult(ctx, request, finalUrl, result, started);
   return result;
 }
 
@@ -389,29 +328,8 @@ function logResult(
     timestamp: new Date().toISOString(),
     error: result.error,
   };
-  if (ctx.onLog) ctx.onLog(entry);
+  if (ctx.onLog) callHook(ctx.onLog, entry);
   else console.info("[api-client]", entry);
-}
-
-/** Parses the response body, tolerating empty and non-JSON payloads. */
-async function parseBody(response: Response): Promise<unknown> {
-  if (response.status === 204 || response.status === 205) return undefined;
-
-  const type = response.headers.get("content-type") ?? "";
-  try {
-    if (type.includes("json")) return await response.json();
-
-    const text = await response.text();
-    if (!text) return undefined;
-    // Some servers send JSON without the header.
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
-  } catch {
-    return undefined;
-  }
 }
 
 /** Normalizes thrown errors (cancel, abort, timeout, offline, bad URL) into the envelope. */
@@ -419,28 +337,18 @@ function applyFailure(result: IRes<unknown>, error: unknown): void {
   const err = error as { name?: string; message?: string; cause?: { name?: string } } | undefined;
   result.status = false;
   result.error = error;
+  result.statusCode = 0;
 
-  // `cause` catches engines that reject aborts with an AbortError and expose
-  // the abort reason only through `error.cause` (older Chromium/Safari).
+  // `cause` catches engines that expose the abort reason only through `error.cause`.
   if (err?.name === "TimeoutError" || err?.cause?.name === "TimeoutError") {
     result.statusCode = 408;
     result.message = "Request timed out";
     return;
   }
   if (err?.name === "AbortError") {
-    /*
-     * Cancellation and abort are the same event to `fetch`, but not to the
-     * caller: a cancel is something the app asked for, so it is flagged and
-     * carries the reason. A timeout is neither — it keeps its own 408.
-     */
-    result.statusCode = 0;
-    result.canceled = true;
-    result.message = cancelMessage(error);
-    const reason = reasonOf(error);
-    if (reason) result.cancelReason = reason;
+    markCanceled(result, error);
     return;
   }
 
-  result.statusCode = 0;
-  result.message = err?.message || "Network request failed";
+  result.message = errorMessage(error, "Network request failed");
 }

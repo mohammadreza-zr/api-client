@@ -26,6 +26,7 @@ interface IRes<R = unknown> {
   status: boolean;
   message: string;
   data?: R;
+  body?: unknown;            // the whole payload, when `data` was unwrapped from it
   loading: boolean;
   errors?: Record<string, string[]>;
   error?: unknown;
@@ -95,6 +96,7 @@ interface RequestConfig<T = unknown>
   addTemplateToUrl?: Record<string, string | number>;
   params?: Params<T>;
   baseUrl?: string;
+  responseType?: ResponseFormat;   // "auto" | "json" | "text" | "blob" | "arrayBuffer"
   timeout?: number;
   fullData?: boolean;
   refreshTokenCheck?: boolean;
@@ -299,12 +301,15 @@ interface LogEntry {
 ```ts
 interface ClientOptions {
   baseUrl?: string;
+  authOrigins?: string[];
+  exposeTokens?: boolean;
+  plugins?: readonly ApiPlugin[];
   timeout?: number;
   throwError?: boolean;
 
   xsrfCookieName?: string;
   xsrfHeaderName?: string;
-  getCsrfToken?: () => string | undefined;
+  getCsrfToken?: () => string | undefined | Promise<string | undefined>;
 
   headers?: Record<string, string>;
   authMode?: AuthMode;

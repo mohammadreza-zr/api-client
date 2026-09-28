@@ -161,36 +161,34 @@ export function tokenFieldNames(mapping?: TokenFieldMap): Set<string> {
 }
 
 /**
- * Removes token-bearing fields from a response body, in place, wherever they
- * appear (bounded depth, cycle-safe).
+ * Removes secrets from a response body, in place, wherever they appear
+ * (bounded depth, cycle-safe): string fields named in `fields`, and any
+ * string equal to one of `values`.
  *
- * Used at the worker → host boundary: a login response usually carries the
- * tokens themselves, and worker mode promises they never reach the main
- * thread. The extractor reads these names at the top level and under
- * `data`/`tokens`/`result`/`payload`; we remove them at any depth so no
- * wrapping shape can smuggle them across. Pass the active `TokenFieldMap` so
- * custom key names are stripped too.
+ * Used at the worker → host boundary, where worker mode promises tokens never
+ * reach the main thread. Only strings are removed — tokens are strings, and
+ * `user.access: ["admin"]` is data that must survive.
  */
-export function stripTokenFields(body: unknown, mapping?: TokenFieldMap): unknown {
-  if (!body || typeof body !== "object") return body;
-
-  const fields = tokenFieldNames(mapping);
+export function redactTokens(body: unknown, fields: ReadonlySet<string>, values: ReadonlySet<string>): unknown {
+  if (!body || typeof body !== "object" || (fields.size === 0 && values.size === 0)) return body;
   const seen = new Set<object>();
+  const isSecret = (value: unknown): boolean => typeof value === "string" && values.has(value);
 
   const walk = (value: unknown, depth: number): unknown => {
     if (value === null || typeof value !== "object") return value;
-    // Cycles are impossible in parsed JSON, but a custom body is not.
-    if (depth > 10 || seen.has(value)) return value;
+    // `seen` stops cycles; the depth cap only guards the stack against absurd nesting.
+    if (depth > 64 || seen.has(value)) return value;
     seen.add(value);
 
     if (Array.isArray(value)) {
-      for (let i = 0; i < value.length; i++) value[i] = walk(value[i], depth + 1);
+      for (let i = 0; i < value.length; i++) value[i] = isSecret(value[i]) ? undefined : walk(value[i], depth + 1);
       return value;
     }
 
     const record = value as Record<string, unknown>;
     for (const key of Object.keys(record)) {
-      if (fields.has(key)) delete record[key];
+      const named = fields.has(key) && typeof record[key] === "string";
+      if (named || isSecret(record[key])) delete record[key];
       else record[key] = walk(record[key], depth + 1);
     }
     return value;
@@ -209,4 +207,13 @@ export function extractUser(body: unknown): unknown {
     if (value && typeof value === "object" && value.user !== undefined) return value.user;
   }
   return undefined;
+}
+
+const SOCKET_TOKEN_KEYS = ["token", "ticket", "socketToken"] as const;
+
+/** The credential in a socket-ticket response: the body itself, or one of the common keys. */
+export function extractSocketToken(data: unknown): string | undefined {
+  if (typeof data === "string") return data || undefined;
+  if (!data || typeof data !== "object") return undefined;
+  return pick(data as Record<string, unknown>, SOCKET_TOKEN_KEYS);
 }

@@ -1,3 +1,5 @@
+import type { ApiPlugin } from "./plugin";
+
 /**
  * Public type surface.
  * Everything a consumer can import is declared here.
@@ -13,6 +15,12 @@ export type AuthMode = "header" | "cookie";
 /** Where tokens are kept between page loads (header mode only). */
 export type StorageKind = "memory" | "local" | "session" | "cookie";
 
+/**
+ * How a response body is read. `"auto"` (default) parses JSON, reads textual
+ * types as text, and returns anything else (files, images, PDFs) as a `Blob`.
+ */
+export type ResponseFormat = "auto" | "json" | "text" | "blob" | "arrayBuffer";
+
 // ── Responses ────────────────────────────────────────────
 
 /** Standardized response envelope returned by every call. Never throws by default. */
@@ -25,6 +33,11 @@ export interface IRes<R = unknown> {
   message: string;
   /** Parsed payload. Unwrapped from `{ data: ... }` unless `fullData` is set. */
   data?: R;
+  /**
+   * The whole parsed payload, set only when `data` was unwrapped from it — so
+   * siblings of `data` (pagination `meta`, `links`, …) stay reachable.
+   */
+  body?: unknown;
   /** Always `false` on a settled response. Kept for UI-state ergonomics. */
   loading: boolean;
   /** Field-level validation errors, when the server sends them. */
@@ -261,8 +274,15 @@ export interface RequestConfig<T = unknown>
   /** Query-string parameters. Nested objects and arrays supported. */
   params?: Params<T>;
 
-  /** Override the base URL for this single request. */
+  /**
+   * Override the base URL for this single request. The access token and CSRF
+   * header are only attached when its origin is the client's `baseUrl` origin
+   * or listed in `authOrigins`.
+   */
   baseUrl?: string;
+
+  /** How to read the response body. Default `"auto"`. */
+  responseType?: ResponseFormat;
 
   /** Per-request timeout in ms. Falls back to the client default. */
   timeout?: number;
@@ -369,6 +389,12 @@ export interface RequestConfig<T = unknown>
   beforeSelectOptions?: (data: T) => unknown;
 }
 
+/** Options for `api.getSocketToken()`: a normal request config, plus the method. */
+export interface SocketTokenOptions extends RequestConfig<unknown> {
+  /** Default `"POST"`: issuing a ticket usually changes server state, and gets CSRF protection. */
+  method?: "GET" | "POST";
+}
+
 // ── Auth ─────────────────────────────────────────────────
 
 /** Auth state broadcast to the app. Never contains tokens. */
@@ -469,6 +495,32 @@ export interface ClientOptions {
    */
   baseUrl?: string;
 
+  /**
+   * Extra origins allowed to receive the access token and CSRF header, e.g.
+   * `["https://files.example.com"]`. The `baseUrl` origin and the page's own
+   * origin are always allowed; every other URL is sent without credentials
+   * headers, so a request to a third party (or one injected by XSS) can't
+   * read the token.
+   */
+  authOrigins?: string[];
+
+  /**
+   * Allow `api.getAccessToken()`, for a WebSocket or socket.io server that
+   * accepts the same token as the API. Default `false`.
+   *
+   * Enabling it lets main-thread code — including injected script — read the
+   * token, which worker isolation otherwise prevents. When the socket server
+   * can issue its own ticket, prefer `api.getSocketToken(url)`, which needs no
+   * opt-in and keeps the access token inside the worker.
+   */
+  exposeTokens?: boolean;
+
+  /**
+   * Optional add-ons, applied in order. They run on the page, around each
+   * request, and never see the access token. See `ApiPlugin`.
+   */
+  plugins?: readonly ApiPlugin[];
+
   /** Default request timeout in ms. Default `30000`. */
   timeout?: number;
 
@@ -538,7 +590,7 @@ export interface ClientOptions {
    * `document.cookie` does not exist). Takes precedence over
    * `xsrfCookieName`.
    */
-  getCsrfToken?: () => string | undefined;
+  getCsrfToken?: () => string | undefined | Promise<string | undefined>;
 
   /** Headers merged into every request. */
   headers?: Record<string, string>;

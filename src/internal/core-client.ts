@@ -8,34 +8,21 @@ import type {
   RequestConfig,
   TokenExtractor,
   TokenPair,
+  TokenStorage,
 } from "../types";
 import { AuthStore } from "./auth-store";
 import { TabSync } from "./broadcast";
-import {
-  CancelRegistry,
-  groupsOf,
-  isCancelable,
-  previewUrl,
-  resolveCancelDefaults,
-  type CancelDefaults,
-} from "./cancel";
+import { previewUrl } from "./cancel";
+import { createCsrfReader, type CsrfReader } from "./cookie";
 import { executeRequest, type EngineContext } from "./engine";
+import { callHook } from "./hooks";
 import { extractUser, normalizeExtractor, normalizeRefreshBody } from "./extract";
-import { detectBaseUrl } from "./env";
-import { resolveStorage } from "./storage";
+import { resolveRequestUrl, trustedOrigins } from "./origin";
+import { applyTransforms } from "./result";
+import { runRefresh } from "./refresh";
+import { sharesSession } from "./storage";
+import { RequestTracker } from "./tracker";
 import { joinUrl } from "./url";
-
-/** Reads a single cookie value by name. */
-function readCookie(name: string): string | undefined {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${escaped}=([^;]*)`));
-  if (!match) return undefined;
-  try {
-    return decodeURIComponent(match[1]);
-  } catch {
-    return match[1];
-  }
-}
 
 /**
  * The full client implementation.
@@ -55,20 +42,30 @@ export class CoreClient {
   private defaultHeaders: Record<string, string>;
   private extractTokens: TokenExtractor;
   private buildRefreshBody: (refresh?: string) => unknown;
-  private xsrfCookieName?: string;
   private xsrfHeaderName: string;
-  private csrfProvider?: () => string | undefined;
+  private readCsrf: CsrfReader;
+  private trusted: ReadonlySet<string>;
+  private sharedSession: boolean;
+  private siblingRefreshedAt = 0;
+  private exposeTokens: boolean;
   private hooks: Pick<ClientOptions, "onAuthStateChanged" | "onAuthFailure" | "onError" | "onLog">;
   private hydrated: Promise<void>;
   private disposed = false;
-  private cancelDefaults: CancelDefaults;
-  private registry = new CancelRegistry();
+  private tracker: RequestTracker;
 
-  constructor(options: ClientOptions = {}) {
+  /**
+   * `storage` is the adapter tokens persist through (`storageFor` on the main
+   * thread, a host proxy in the worker); none means memory only. It is passed
+   * in so the worker bundle never ships adapters it cannot use, while
+   * `options.storage` still names the kind — whether tabs share the session
+   * depends on what the host really stores into.
+   */
+  constructor(options: ClientOptions = {}, storage?: TokenStorage) {
     const authMode = options.authMode ?? "header";
 
     this.opts = {
-      baseUrl: (options.baseUrl ?? detectBaseUrl()).replace(/\/+$/, ""),
+      // Resolved by the caller (`resolveBaseUrl`), so env detection never ships in the worker bundle.
+      baseUrl: (options.baseUrl ?? "").replace(/\/+$/, ""),
       timeout: options.timeout ?? 30_000,
       authMode,
       credentials: options.credentials ?? (authMode === "cookie" ? "include" : "same-origin"),
@@ -78,28 +75,23 @@ export class CoreClient {
       refreshSkewMs: options.refreshSkewMs ?? 30_000,
     };
 
-    this.defaultHeaders = { "Content-Type": "application/json", ...options.headers };
-    this.cancelDefaults = resolveCancelDefaults(options.cancel);
-    this.xsrfCookieName = options.xsrfCookieName;
+    this.defaultHeaders = { ...options.headers };
+    this.tracker = new RequestTracker(options.cancel, this.opts.baseUrl);
     this.xsrfHeaderName = options.xsrfHeaderName ?? "X-CSRF-Token";
-    this.csrfProvider = options.getCsrfToken;
+    this.readCsrf = createCsrfReader(options);
+    this.trusted = trustedOrigins(this.opts.baseUrl, options.authOrigins);
+    this.sharedSession = sharesSession(options);
+    this.exposeTokens = options.exposeTokens === true;
     // Accepts both the function forms and the declarative (serializable)
     // TokenFieldMap / RefreshBodyConfig forms.
     this.extractTokens = normalizeExtractor(options.extractTokens);
     this.buildRefreshBody = normalizeRefreshBody(options.buildRefreshBody);
-    this.hooks = {
-      onAuthStateChanged: options.onAuthStateChanged,
-      onAuthFailure: options.onAuthFailure,
-      onError: options.onError,
-      onLog: options.onLog,
-    };
+    this.hooks = options;
 
     const storageKey = options.storageKey ?? "apiclient";
     // Cookie mode keeps tokens server-side; nothing to persist locally.
-    const storage = authMode === "cookie" ? undefined : resolveStorage(options.storage ?? "memory", storageKey);
-
-    this.auth = new AuthStore(storage);
-    this.auth.subscribe((state) => this.hooks.onAuthStateChanged?.(state));
+    this.auth = new AuthStore(authMode === "cookie" ? undefined : storage);
+    this.auth.subscribe((state) => callHook(this.hooks.onAuthStateChanged, state));
 
     this.tabs = new TabSync(`${storageKey}.auth`, options.multiTab !== false);
     this.tabs.on((msg) => this.onTabMessage(msg));
@@ -114,11 +106,12 @@ export class CoreClient {
 
     if (msg.type === "logout") {
       this.auth.clear();
-      this.hooks.onAuthFailure?.();
+      callHook(this.hooks.onAuthFailure);
       return;
     }
 
     if (msg.type === "refreshed" || msg.type === "login") {
+      this.siblingRefreshedAt = Date.now();
       /*
        * Cookie mode: there is no shared storage to re-read — `hydrate()` is a
        * no-op without an adapter — but the httpOnly cookie is origin-scoped,
@@ -144,6 +137,7 @@ export class CoreClient {
       defaultHeaders: this.defaultHeaders,
       credentials: this.opts.credentials,
       authMode: this.opts.authMode,
+      trustedOrigins: this.trusted,
       getAccessToken: () => this.auth.accessToken,
       refresh: () => this.refresh(),
       shouldPreemptivelyRefresh: (skewMs?: number) => {
@@ -155,112 +149,54 @@ export class CoreClient {
         if (!this.auth.accessToken || !this.auth.refreshToken) return false;
         return this.auth.isExpired(window);
       },
-      getCsrfToken: () => this.readCsrfToken(),
+      getCsrfToken: this.readCsrf,
       csrfHeaderName: this.xsrfHeaderName,
       onLog: this.hooks.onLog,
     };
   }
 
   /**
-   * Resolves the CSRF token.
+   * Refreshes the access token. Concurrent callers share one network call,
+   * tabs take turns, and other tabs are told the result.
    *
-   * An explicit provider wins, since `document.cookie` does not exist inside a
-   * Web Worker or on the server — that is exactly when `getCsrfToken` is needed.
-   */
-  private readCsrfToken(): string | undefined {
-    if (this.csrfProvider) {
-      try {
-        return this.csrfProvider();
-      } catch {
-        return undefined;
-      }
-    }
-    if (!this.xsrfCookieName || typeof document === "undefined") return undefined;
-    return readCookie(this.xsrfCookieName);
-  }
-
-  /**
-   * Refreshes the access token.
-   * Concurrent callers share one network call; other tabs are told the result.
-   *
-   * Returns `true` on success, `false` on failure. Only a **server
-   * rejection** ends the session; a network failure leaves it intact — a
-   * subway tunnel is not a logout.
+   * Returns `true` on success, `false` on failure. Only a server rejection
+   * ends the session; a network failure leaves it intact.
    */
   async refresh(): Promise<boolean> {
-    return this.auth.coalesceRefresh(async () => {
-      // Let whichever tab claimed leadership drive; others still await their
-      // own call, which is harmless and keeps them correct if the leader dies.
-      this.tabs.claimLeadership();
-
-      const url = joinUrl(this.opts.baseUrl, this.opts.refreshUrl);
-      const body = this.buildRefreshBody(this.auth.refreshToken);
-
-      // Header mode with no refresh token cannot possibly succeed.
-      if (this.opts.authMode === "header" && !this.auth.refreshToken) {
-        this.failAuth();
-        return false;
-      }
-
-      let response: Response;
-      try {
-        response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...this.defaultHeaders },
-          credentials: this.opts.credentials,
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-      } catch {
-        /*
-         * The network failed — offline, DNS, a dropped connection, a timeout.
-         * That says nothing about the session: the stored tokens may be
-         * perfectly valid, so clearing them here would log the user out of
-         * every tab on a network blip. Report the failure to the caller and
-         * leave auth alone; the request that hit the 401 surfaces as 401.
-         */
-        return false;
-      }
-
-      // The server answered. Only an authentication rejection — 401/403 from
-      // the refresh endpoint — is the server's verdict that the session is
-      // dead, so that is the only case that tears auth down everywhere.
-      // Anything else (a 5xx, a rate-limit 429, a 400 from a bad request) is
-      // a server-side problem that says nothing about the session, so leave
-      // it intact exactly like a network failure.
-      if (response.status === 401 || response.status === 403) {
-        this.failAuth();
-        return false;
-      }
-      if (!response.ok) return false;
-
-      const payload = await response.json().catch(() => undefined);
-      const tokens = this.extractTokens(payload);
-
-      if (tokens?.accessToken || tokens?.refreshToken) {
-        this.auth.apply(tokens);
-      } else if (this.opts.authMode === "cookie") {
-        // Server rotated httpOnly cookies and returned no body.
-        this.auth.apply({ expiresAt: undefined });
-        this.auth.markSession(true);
-      } else {
-        this.failAuth();
-        return false;
-      }
-
-      this.tabs.post({ type: "refreshed", tabId: this.tabs.tabId, expiresAt: this.auth.expiresAt });
-      return true;
-    });
+    return this.auth.coalesceRefresh(() =>
+      runRefresh({
+        auth: this.auth,
+        tabs: this.tabs,
+        url: joinUrl(this.opts.baseUrl, this.opts.refreshUrl),
+        authMode: this.opts.authMode,
+        credentials: this.opts.credentials,
+        timeout: this.opts.timeout,
+        defaultHeaders: this.defaultHeaders,
+        sharedSession: this.sharedSession,
+        extractTokens: this.extractTokens,
+        buildRefreshBody: this.buildRefreshBody,
+        readCsrf: this.readCsrf,
+        csrfHeaderName: this.xsrfHeaderName,
+        siblingRefreshedAt: () => this.siblingRefreshedAt,
+        reject: () => this.failAuth(),
+      }),
+    );
   }
 
   private failAuth(): void {
+    // Only a shared session is ended everywhere. In header mode a tab holding no
+    // credentials proves nothing about the others; in cookie mode every tab sends
+    // the same cookie, so the server's rejection is the verdict for all of them.
+    const broadcast = this.sharedSession && (this.opts.authMode === "cookie" || this.auth.hasCredentials);
     this.auth.clear();
-    this.tabs.post({ type: "logout", tabId: this.tabs.tabId });
-    this.hooks.onAuthFailure?.();
+    if (broadcast) this.tabs.post({ type: "logout", tabId: this.tabs.tabId });
+    callHook(this.hooks.onAuthFailure);
   }
 
   // ── requests ───────────────────────────────────────────
 
-  private async send<R>(
+  /** The request pipeline behind every verb; also the worker host's in-page fallback. */
+  async send<R>(
     method: HttpMethod,
     url: string,
     body?: unknown,
@@ -269,21 +205,8 @@ export class CoreClient {
     await this.hydrated;
 
     const request = config as RequestConfig<unknown> | undefined;
-
-    /*
-     * Register the request only when it is actually cancelable, so a client
-     * that never opts in pays nothing — no map entry, no AbortController, no
-     * URL pre-build.
-     */
-    const tracked = isCancelable(method, request, this.cancelDefaults)
-      ? this.registry.track({
-          method,
-          url: previewUrl(url, config?.baseUrl ?? this.opts.baseUrl, request),
-          key: request?.cancelKey,
-          groups: groupsOf(request),
-          takeLatest: request?.takeLatest ?? this.cancelDefaults.takeLatest,
-        })
-      : undefined;
+    // Tracked only when cancelable: a client that never opts in pays nothing.
+    const tracked = this.tracker.track(method, url, request);
 
     let result: IRes<R>;
     try {
@@ -313,7 +236,9 @@ export class CoreClient {
      * `markSession(true)` themselves.
      */
     if (this.opts.authMode === "cookie" && !config?.skipAuth) {
-      if (result.statusCode === 401 || result.statusCode === 403) {
+      // With the refresh flow on, a rejected refresh already ended the session and
+      // a network blip must not; 403 means "not allowed", not "not signed in".
+      if (result.statusCode === 401 && config?.refreshTokenCheck === false) {
         this.auth.markSession(false);
       }
     }
@@ -324,7 +249,7 @@ export class CoreClient {
      * modal, which is exactly what this feature exists to avoid.
      */
     if (!result.status && !result.canceled && !config?.hideErrorMessage) {
-      this.hooks.onError?.(result);
+      callHook(this.hooks.onError, result);
     }
 
     return result;
@@ -334,17 +259,17 @@ export class CoreClient {
 
   /** Cancels matching in-flight requests. Returns how many were stopped. */
   cancel(selector?: CancelSelector, reason?: string): number {
-    return this.registry.cancel(selector, reason);
+    return this.tracker.cancel(selector, reason);
   }
 
   /** The cancelable requests currently in flight. */
   pending(selector?: CancelSelector): PendingRequest[] {
-    return this.registry.pending(selector);
+    return this.tracker.pending(selector);
   }
 
   /** Whether a canceled request should reject. Independent of `throwError`. */
   shouldThrowOnCancel(config?: RequestConfig<unknown>): boolean {
-    return config?.throwOnCancel ?? this.cancelDefaults.throwOnCancel;
+    return this.tracker.shouldThrowOnCancel(config);
   }
 
   get<R = unknown>(url: string, config?: RequestConfig<R>): Promise<IRes<R>> {
@@ -366,11 +291,14 @@ export class CoreClient {
   // ── auth actions ───────────────────────────────────────
 
   async login<R = unknown>(body: unknown, config?: RequestConfig<R>): Promise<IRes<R>> {
+    // The caller's transforms shape what login returns; they must not run
+    // before the tokens are read, or a transform could hide them.
+    const { afterFunc, beforeSelectOptions, ...handshake } = config ?? {};
     const result = await this.send<R>("POST", this.opts.loginUrl, body, {
       // A caller can still opt in explicitly; the default is never to make an
       // auth handshake collateral damage of a route change.
       cancelable: false,
-      ...config,
+      ...handshake,
       skipAuth: true,
       refreshTokenCheck: false,
       fullData: true,
@@ -378,7 +306,7 @@ export class CoreClient {
 
     if (result.status) {
       const tokens = this.extractTokens(result.data);
-      if (tokens) this.auth.apply(tokens);
+      if (tokens || this.opts.authMode === "cookie") this.auth.replace(tokens ?? {});
       /*
        * In cookie mode the tokens are httpOnly: the body carries no access
        * token and `document.cookie` cannot see one either. A 2xx from the
@@ -397,9 +325,11 @@ export class CoreClient {
       if (!config?.fullData) {
         const envelope = result.data as Record<string, unknown> | undefined;
         if (envelope && typeof envelope === "object" && envelope.data !== undefined) {
+          result.body = envelope;
           result.data = envelope.data as R;
         }
       }
+      applyTransforms(result as IRes<unknown>, { afterFunc, beforeSelectOptions } as RequestConfig<unknown>);
     }
 
     return result;
@@ -428,7 +358,7 @@ export class CoreClient {
 
   async setTokens(tokens: TokenPair): Promise<void> {
     await this.hydrated;
-    this.auth.apply(tokens);
+    this.auth.seed(tokens);
     // Await durability: callers seed tokens then often navigate immediately.
     await this.auth.flush();
     this.tabs.post({ type: "login", tabId: this.tabs.tabId, expiresAt: this.auth.expiresAt });
@@ -485,6 +415,33 @@ export class CoreClient {
     return this.auth.state;
   }
 
+  /** See `ApiClient.getAccessToken`. Enforced here, so in worker mode the worker itself refuses. */
+  async getAccessToken(): Promise<string | undefined> {
+    if (!this.exposeTokens) {
+      throw new Error(
+        "getAccessToken() needs createClient({ exposeTokens: true }). " +
+          "If your socket server can issue its own ticket, use api.getSocketToken(url) instead.",
+      );
+    }
+    await this.hydrated;
+    if (this.opts.authMode === "cookie") return undefined;
+    if (this.auth.refreshToken && this.auth.isExpired(this.opts.refreshSkewMs)) await this.refresh();
+    return this.auth.isExpired() ? undefined : this.auth.accessToken;
+  }
+
+  /** For the worker boundary: the session's tokens, which must never cross to the page. */
+  liveTokens(): Set<string> {
+    return new Set([this.auth.accessToken, this.auth.refreshToken].filter((t): t is string => Boolean(t)));
+  }
+
+  /** For the worker boundary: whether `url` is this client's login or refresh endpoint, which mint tokens. */
+  isAuthEndpoint(url: string, config?: RequestConfig<unknown>): boolean {
+    // Origin and path both count: another host's `/auth/refresh` isn't ours.
+    const endpoint = (u: string) => resolveRequestUrl(u).split(/[?#]/)[0].replace(/\/+$/, "");
+    const target = endpoint(previewUrl(url, this.opts.baseUrl, config));
+    return [this.opts.loginUrl, this.opts.refreshUrl].some((u) => endpoint(joinUrl(this.opts.baseUrl, u)) === target);
+  }
+
   async getAuthState(): Promise<AuthState> {
     await this.hydrated;
     return this.auth.state;
@@ -496,7 +453,7 @@ export class CoreClient {
 
   destroy(): void {
     this.disposed = true;
-    this.registry.cancel(undefined, "client destroyed");
+    this.tracker.cancel(undefined, "client destroyed");
     this.tabs.destroy();
   }
 }

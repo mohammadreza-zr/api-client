@@ -10,20 +10,28 @@ An honest account of what this client protects against, and what it doesn't.
 |---|---|---|
 | **Token theft via XSS** | Worker isolation + memory storage | **Strong** — no readable variable, no storage key |
 | **Token use via XSS** | None | **None** — see below |
+| **Token sent to another origin** | Token and CSRF header only go to the `baseUrl` origin, the page's own origin and `authOrigins`. Each URL is resolved once, with the platform's URL parser, and that exact URL is both checked and fetched | **Strong** — an injected or third-party URL gets no credentials, whatever its spelling (`//host`, `\\host`, `/\host`) |
+| **Token read by page code** | `getAccessToken()` refused unless `exposeTokens: true`; sockets get a server-issued ticket via `getSocketToken()`; every response leaving the worker has the session's tokens redacted, and responses from the login/refresh endpoints lose their token fields | **Strong** unless you opt in — see the caveat below |
+| **Plugins** | Plugins run on the page and never see the token; a failing plugin fails one call. They can add trusted origins, so install only plugins you trust | By design — see [[Plugins]] |
+| **Path injection via URL values** | `addTemplateToUrl` / `addToUrl` values encoded as one segment | **Strong** |
 | **CSRF** | Double-submit header mirroring | **Strong**, if your server enforces it |
 | **Token leakage in logs** | Tokens never enter `LogEntry`, `AuthState` or tab messages | **Strong** |
 | **Cross-tab desync** | BroadcastChannel logout propagation | **Strong** |
-| **Refresh stampede** | Promise coalescing + leader election | **Strong** |
+| **Refresh stampede / token reuse** | Promise coalescing + cross-tab Web Lock | **Strong** where Web Locks exists |
 | **MITM** | Not addressed — use HTTPS | n/a |
 | **Malicious dependency** | Zero runtime dependencies | **Strong** |
 
 ---
 
+## Endpoints that mint tokens
+
+The worker redacts the session's own tokens from every response, and strips token fields from the login and refresh endpoints. It cannot know about other endpoints of yours that hand out a new credential to an authenticated caller — an OAuth token exchange, an API-key endpoint, a socket-ticket endpoint. Injected script can call those through the client like any other request and read what they return. Keep such credentials short-lived and narrowly scoped, and don't return long-lived bearer tokens from them.
+
 ## The uncomfortable truth about XSS
 
 > Worker isolation prevents token **theft**. It cannot stop an attacker who already has XSS from *using* your client.
 
-An injected script can call `api.post("/transfer", { to: "attacker" })` and the worker will attach the token. Isolation stops one specific thing: the token leaving the browser.
+An injected script can call `api.post("/transfer", { to: "attacker" })` and the worker will attach the token. Isolation stops one specific thing: the token leaving the browser. That holds because the token is only attached for trusted origins — `api.get("https://attacker.example")` goes out without it.
 
 Why that still matters:
 

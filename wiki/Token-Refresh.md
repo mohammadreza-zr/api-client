@@ -58,7 +58,7 @@ coalesceRefresh(task) {
 }
 ```
 
-Fifty simultaneous 401s → one network call, no polling, no artificial delay. Across tabs, `BroadcastChannel` leader election narrows it further — see [[Multi-Tab Sync]].
+Fifty simultaneous 401s → one network call, no polling, no artificial delay. Across tabs, refreshes take turns through a Web Lock, and a tab adopts a sibling's result instead of refreshing again — see [[Multi-Tab Sync]].
 
 ---
 
@@ -187,7 +187,9 @@ They decode base64url in browsers, workers and Node (via `atob` or `Buffer`), re
 
 If your server issues a **new refresh token** with each refresh, it just works: `extractTokens` returns both, and `AuthStore.apply` updates both. Only the keys present in the returned pair are overwritten, so returning access-only leaves the existing refresh token intact.
 
-With rotation plus multi-tab, race conditions become a real risk — two tabs presenting the same refresh token, one of them getting rejected. Leader election plus refresh coalescing prevents this for tabs of the same origin sharing storage. Keep `multiTab: true` and use a shared storage kind (`"local"` or `"cookie"`) if you enable rotation.
+With rotation plus multi-tab, race conditions become a real risk — two tabs presenting the same refresh token, one of them getting rejected. The cross-tab refresh lock plus refresh coalescing prevents this for tabs of the same origin sharing storage. Keep `multiTab: true` and use a shared storage kind (`"local"` or `"cookie"`) if you enable rotation.
+
+The refresh request carries the CSRF header like any other write, and is bounded by the client `timeout`: an endpoint that never answers counts as a network failure, which keeps the session.
 
 ---
 

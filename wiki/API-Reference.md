@@ -64,7 +64,7 @@ await api.delete("/users/{id}", { addTemplateToUrl: { id: 42 } });
 login<R = unknown>(body: unknown, config?: RequestConfig<R>): Promise<IRes<R>>;
 ```
 
-`POST`s to `loginUrl` with `skipAuth`, no refresh check, and `fullData` internally; extracts tokens and `user`; broadcasts `login` to other tabs; then re-applies your unwrapping preference to the returned `data`.
+`POST`s to `loginUrl` with `skipAuth`, no refresh check, and `fullData` internally; extracts tokens and `user`; broadcasts `login` to other tabs; then re-applies your unwrapping preference to the returned `data`. A successful login starts a fresh session: nothing from a previous one (refresh token, `user`) survives, even if the new response doesn't carry it.
 
 ```ts
 await api.login({ email: "a@b.com", password: "secret" });
@@ -94,7 +94,7 @@ await api.logout();
 setTokens(tokens: TokenPair): Promise<void>;
 ```
 
-Seed tokens from SSR, an OAuth callback, or your own login flow. Only the keys you pass are updated. Expiry is derived from the JWT `exp` claim when `expiresAt` is omitted. Broadcasts `login`.
+Seed tokens from SSR, an OAuth callback, or your own login flow. A key you omit is kept; a key you pass as `undefined` is cleared. Expiry is derived from the JWT `exp` claim when `expiresAt` is omitted, and a new opaque token has no known expiry. A refresh already in flight is discarded. Broadcasts `login`.
 
 ```ts
 await api.setTokens({ accessToken, refreshToken });
@@ -120,6 +120,22 @@ if (!ok && !(await api.getAuthState()).isAuthenticated) redirectToLogin();
 ```
 
 ---
+
+### `getSocketToken(url, options?)`
+
+```ts
+getSocketToken(url: string, options?: SocketTokenOptions): Promise<string>;
+```
+
+Calls your endpoint through the client (authenticated, refreshed on 401; `POST` unless `options.method` is `"GET"`) and returns the socket credential it answers with: a plain string, or `{ token | ticket | socketToken }`, optionally under `data`. Rejects with an `ApiError` on failure or when no token is found. The access token never leaves the worker. See [[WebSockets and Socket.io]].
+
+### `getAccessToken()`
+
+```ts
+getAccessToken(): Promise<string | undefined>;
+```
+
+The current access token, refreshed first when it expires within `refreshSkewMs`. Requires `exposeTokens: true` and rejects otherwise; `undefined` without a usable token and in cookie mode. See [[WebSockets and Socket.io]] for the trade-off.
 
 ### `getAuthState()`
 

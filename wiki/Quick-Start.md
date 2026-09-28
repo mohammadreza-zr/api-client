@@ -13,7 +13,7 @@ export const api = createClient({
 });
 ```
 
-If `baseUrl` is omitted, it is auto-detected from the first environment variable that is set: `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_BASE_URL`, `VITE_API_URL`, `VITE_BASE_URL`, `NUXT_PUBLIC_API_URL`, `PUBLIC_API_URL`, `API_URL`.
+If `baseUrl` is omitted, it comes from an environment variable such as `NEXT_PUBLIC_API_URL` or `VITE_API_URL` ([full list](Client-Options#baseurl-auto-detection)), and in a browser falls back to the page origin.
 
 Worker isolation, token refresh and cross-tab sync are **on by default** and disable themselves where unsupported.
 

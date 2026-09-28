@@ -174,7 +174,7 @@ useEffect(() => {
 
 ```ts
 interface AuthState {
-  isAuthenticated: boolean;      // header mode: a non-expired access token
+  isAuthenticated: boolean;      // header mode: a refresh token, or a non-expired access token
                                  // cookie mode: a session the server confirmed
   expiresAt: number | null;      // epoch ms, or null for opaque tokens
   user?: unknown;                // whatever login/refresh returned as `user`

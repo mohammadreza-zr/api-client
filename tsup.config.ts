@@ -1,7 +1,8 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  // Plugins are separate entry points, so an app that doesn't import one pays nothing for it.
+  entry: { index: "src/index.ts", services: "src/plugins/services.ts" },
   format: ["cjs", "esm"],
   dts: true,
   clean: true,
