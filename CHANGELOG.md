@@ -73,6 +73,12 @@ A security and correctness pass. Every fix below has a regression test in
   tab can't stall refreshes everywhere.
 - `CookieStorage` caps the chunk count it trusts, so a planted cookie can't
   freeze the tab.
+- `baseUrl: ""` (the page origin) failed every request in worker mode; a
+  `baseUrl` without a scheme (`"localhost:4000"`) failed with a bare
+  `fetch failed` and now says what is missing.
+- Token redaction at the worker boundary reached only 10 levels deep.
+- A token pair too large for `CookieStorage` is reported with a console
+  warning instead of being dropped silently.
 - Using the client with no `baseUrl` on the server (Node, SSR, tests) failed
   with `Failed to parse URL from /users`. It now fails with a message naming
   the option and the env variables to set.

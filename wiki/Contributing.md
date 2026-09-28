@@ -93,7 +93,7 @@ npm run verify     # build, every suite, then the packaging suite
 npm test           # every suite except packaging, against the current dist/
 ```
 
-Thirteen suites, **603 assertions**, all against real `node:http` servers — no mocked `fetch`, because the whole point is verifying real network behaviour. `npm test` is the one list of suites: CI and the release workflow run it too.
+Thirteen suites, **608 assertions**, all against real `node:http` servers — no mocked `fetch`, because the whole point is verifying real network behaviour. `npm test` is the one list of suites: CI and the release workflow run it too.
 
 | Suite | Covers |
 |---|---|

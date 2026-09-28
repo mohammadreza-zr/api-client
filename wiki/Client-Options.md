@@ -78,7 +78,7 @@ Each name is read from, in order:
 4. `import.meta.env` at runtime (Vite dev and SSR)
 5. `globalThis.__VITE_ENV__`, `globalThis.__ENV__`, `globalThis.ENV` — for hand-injected runtime config
 
-If none is set, `baseUrl` is the page origin in a browser or worker. On the server (Node, SSR, tests) there is no page, so a request to a relative path fails with a message naming the option and these variables — rather than guessing a host. A relative `baseUrl` such as `"/api"` is resolved against the page.
+If none is set, `baseUrl` is the page origin in a browser or worker. On the server (Node, SSR, tests) there is no page, so a request to a relative path fails with a message naming the option and these variables — rather than guessing a host. A relative `baseUrl` such as `"/api"` is resolved against the page, and `baseUrl: ""` means the page origin itself (it also switches env detection off). A `baseUrl` written without its scheme, such as `"localhost:4000"`, fails with a message asking for `http://` or `https://`.
 
 > Detection must use *literal* `process.env.FOO` reads, because bundlers inline env vars by replacing that exact text. A dynamic `process.env[key]` lookup is invisible to that pass, and browser bundles have no `process` at all — which is why auto-detection silently produced `""` in the browser before v1.0.2.
 
