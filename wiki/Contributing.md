@@ -33,6 +33,7 @@ src/
     env.ts                  capability detection, baseUrl discovery and resolution
     result.ts               IRes constructors, cancellation marking and response transforms, shared by both modes
     tracker.ts              a client's cancel registry and defaults, shared by both modes
+    hooks.ts                callHook(): app callbacks can never break the client
   worker/
     worker-entry.ts         the worker's message loop + host bridge (storage, CSRF)
     worker-host.ts          the main-thread proxy; in-page fallback when the worker can't boot
@@ -93,7 +94,7 @@ npm run verify     # build, every suite, then the packaging suite
 npm test           # every suite except packaging, against the current dist/
 ```
 
-Thirteen suites, **608 assertions**, all against real `node:http` servers — no mocked `fetch`, because the whole point is verifying real network behaviour. `npm test` is the one list of suites: CI and the release workflow run it too.
+Thirteen suites, **623 assertions**, all against real `node:http` servers — no mocked `fetch`, because the whole point is verifying real network behaviour. `npm test` is the one list of suites: CI and the release workflow run it too.
 
 | Suite | Covers |
 |---|---|

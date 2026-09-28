@@ -43,7 +43,7 @@ Verified, including the rows where this library loses.
 | | axios | ky | @mrzr/api-client |
 |---|---|---|---|
 | Zero runtime dependencies | ✗ | ✓ | ✓ |
-| Bundle, min+gzip | ~14 KB | **~4 KB** | 17.7 KB |
+| Bundle, min+gzip | ~14 KB | **~4 KB** | 18.1 KB |
 | Built on | XHR / node:http | fetch | fetch |
 | Retry with backoff | via `axios-retry` | **✓ built in** | ✗ *(not yet)* |
 | Interceptors / hooks | **✓ global** | **✓ global** | per-request transforms |
@@ -56,7 +56,7 @@ Verified, including the rows where this library loses.
 
 Two honest notes on that table:
 
-- **Size.** 17.7 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even when you pass `worker: false`: a runtime flag can't be tree-shaken away. Worth knowing before you install.
+- **Size.** 18.1 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even when you pass `worker: false`: a runtime flag can't be tree-shaken away. Worth knowing before you install.
 - **Retry.** Not implemented. It has to interact correctly with refresh-and-retry, cancellation and `takeLatest`, and shipping it half-right would be worse than not shipping it.
 
 ---
@@ -494,7 +494,7 @@ Full guide, with copy-paste recipes for React, Next, Vue, Svelte, Angular, TanSt
 |---|---|---|
 | `baseUrl` | auto-detected | Falls back to an env variable ([list](https://github.com/mohammadreza-zr/api-client/wiki/Client-Options#baseurl-auto-detection)), then the page origin in a browser. On the server with neither, requests fail with a message saying what to set |
 | `exposeTokens` | `false` | Allow `api.getAccessToken()` for a socket server that accepts the API token. Prefer `getSocketToken(url)`, which keeps the token in the worker |
-| `authOrigins` | `[]` | Extra origins allowed to receive the access token and CSRF header. The `baseUrl` origin is always allowed |
+| `authOrigins` | `[]` | Extra origins allowed to receive the access token and CSRF header. The `baseUrl` origin and the page's own origin are always allowed |
 | `timeout` | `30000` | Per-request timeout in ms |
 | `throwError` | `true` | Reject with `ApiError` on failure. Set `false` for the never-throwing envelope. Overridable per request |
 | `headers` | `{}` | Merged into every request |

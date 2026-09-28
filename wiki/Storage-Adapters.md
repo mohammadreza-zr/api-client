@@ -70,7 +70,7 @@ apiclient.tokens={"accessToken":"…"}; Expires=…; Path=/; SameSite=Lax; Secur
 
 Use it when the server needs to read tokens during SSR. Be aware the cookie is sent on **every** request to the origin, which grows your request size.
 
-A browser drops any single cookie over ~4 KB, so a large token pair is split across `<key>.0`, `<key>.1`, … automatically. Mind the total: many servers reject requests whose headers exceed 8 KB (nginx's default), so a big JWT pair in cookies can fail *every* request to your site with `431` or `400`. Beyond 16 chunks (~19 KB of tokens) the adapter writes nothing and warns once in the console; use `storage: "local"` for tokens that large.
+A browser drops any single cookie over ~4 KB, so a large token pair is split across `<key>.0`, `<key>.1`, … automatically. Mind the total: many servers reject requests whose headers exceed 8 KB (nginx's default), so a big JWT pair in cookies can fail *every* request to your site with `431` or `400`. Beyond 5 cookies (~19 KB, encoded) the adapter writes nothing and warns once in the console; use `storage: "local"` for tokens that large. Each write uses fresh cookie names and switches over in one step, so another tab reading at the same moment sees the old tokens or the new ones, never a mix.
 
 > This is *not* the same as `authMode: "cookie"`. This adapter stores a client-readable cookie in header mode. Cookie **mode** uses httpOnly cookies your server sets and never exposes.
 

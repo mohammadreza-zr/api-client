@@ -44,7 +44,7 @@ Each suite starts its own real `node:http` server (`verify/server.mjs`, `verify/
 
 **Token exposure.** Only `getAccessToken()` returns a token to page code, and only when `exposeTokens: true` — enforced inside `CoreClient`, so in worker mode the worker itself refuses. `getSocketToken()` is a plain request built in `client.ts`, returning the server's ticket, never the access token.
 
-**Token trust.** The engine attaches `Authorization` and the CSRF header only when the final URL is relative or its origin is the `baseUrl` origin or in `authOrigins` (`internal/origin.ts`). Never attach credentials anywhere else.
+**Token trust.** The engine resolves each URL once with `resolveRequestUrl` (the platform URL parser, against the page) and uses that exact string both for the trust check and for `fetch`, so the two cannot disagree. `Authorization` and the CSRF header go only to the `baseUrl` origin, the page origin and `authOrigins` (`internal/origin.ts`). Never classify URLs by hand, and never attach credentials anywhere else. App hooks (`onLog`, `onError`, …) are always called through `callHook`, so a throwing hook can't break a request.
 
 **Refresh** (`src/internal/refresh.ts`) coalesces concurrent 401s onto one shared promise (`AuthStore.coalesceRefresh`), runs under a cross-tab Web Lock, adopts a sibling tab's fresh tokens instead of re-spending a rotating refresh token, has the client timeout, and sends CSRF. `AuthStore.generation` bumps on logout/login/`setTokens`; a refresh that started under an older generation must not write back. Only an auth rejection (401/403) from the refresh endpoint clears the session. 5xx, timeouts and network failures leave it intact. Test refresh changes with N concurrent 401s, not one.
 

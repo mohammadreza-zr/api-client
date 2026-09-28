@@ -79,6 +79,25 @@ A security and correctness pass. Every fix below has a regression test in
 - Token redaction at the worker boundary reached only 10 levels deep.
 - A token pair too large for `CookieStorage` is reported with a console
   warning instead of being dropped silently.
+- URLs such as `\\evil.com` and `/\evil.com` were treated as same-origin
+  paths, though browsers resolve them to `evil.com`. Each URL is now resolved
+  once with the platform's URL parser, and that exact URL is both checked and
+  fetched. The page's own origin stays trusted for relative requests.
+- Cookie mode: a tab that had not seen the login locally could not end the
+  shared session in the other tabs when the server rejected it.
+- Independent per-tab sessions (memory or `sessionStorage`) no longer queue
+  behind each other's refresh; only shared sessions take turns.
+- In worker mode the login/refresh endpoint check ignored the origin, so
+  another host's `/auth/refresh` lost its token fields.
+- `login()` / `logout()` ignored `afterFunc` / `beforeSelectOptions` in worker
+  mode, and on the main thread a login transform ran before the tokens were
+  read and could hide them. Transforms now shape the returned value, after
+  token capture, in both modes.
+- An app hook that threw (`onLog`, `onError`, `onAuthFailure`,
+  `onAuthStateChanged`) could turn a finished request into a rejection, or
+  crash the page in worker mode. Hooks can no longer break the client.
+- `CookieStorage` chunking: another tab reading mid-write could see a mix of
+  old and new chunks, and non-ASCII tokens could overflow a single cookie.
 - Using the client with no `baseUrl` on the server (Node, SSR, tests) failed
   with `Failed to parse URL from /users`. It now fails with a message naming
   the option and the env variables to set.

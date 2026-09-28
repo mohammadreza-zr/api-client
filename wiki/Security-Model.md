@@ -10,7 +10,7 @@ An honest account of what this client protects against, and what it doesn't.
 |---|---|---|
 | **Token theft via XSS** | Worker isolation + memory storage | **Strong** — no readable variable, no storage key |
 | **Token use via XSS** | None | **None** — see below |
-| **Token sent to another origin** | Token and CSRF header only go to the `baseUrl` origin and `authOrigins` | **Strong** — an injected or third-party URL gets no credentials |
+| **Token sent to another origin** | Token and CSRF header only go to the `baseUrl` origin, the page's own origin and `authOrigins`. Each URL is resolved once, with the platform's URL parser, and that exact URL is both checked and fetched | **Strong** — an injected or third-party URL gets no credentials, whatever its spelling (`//host`, `\\host`, `/\host`) |
 | **Token read by page code** | `getAccessToken()` refused unless `exposeTokens: true`; sockets get a server-issued ticket via `getSocketToken()`; every response leaving the worker has the session's tokens redacted, and responses from the login/refresh endpoints lose their token fields | **Strong** unless you opt in — see the caveat below |
 | **Path injection via URL values** | `addTemplateToUrl` / `addToUrl` values encoded as one segment | **Strong** |
 | **CSRF** | Double-submit header mirroring | **Strong**, if your server enforces it |
