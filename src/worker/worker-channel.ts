@@ -164,6 +164,9 @@ export class WorkerChannel {
       case "refreshed":
         this.settle(msg.id, (entry) => entry.resolve(msg.ok as never));
         break;
+      case "accessToken":
+        this.settle(msg.id, (entry) => entry.resolve(msg.token as never));
+        break;
       case "void":
         this.settle(msg.id, (entry) => entry.resolve(undefined as never));
         break;

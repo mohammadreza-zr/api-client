@@ -83,6 +83,8 @@ export type HostMessage =
   | { kind: "setTokens"; id: number; tokens: TokenPair }
   | { kind: "authState"; id: number }
   | { kind: "refresh"; id: number }
+  /** Only answered when the client was created with `exposeTokens: true`. */
+  | { kind: "accessToken"; id: number }
   | { kind: "restoreSession"; id: number; url?: string }
   | { kind: "destroy" }
   /** Reply to a worker-initiated storage read/write. */
@@ -95,6 +97,7 @@ export type WorkerMessage =
   | { kind: "result"; id: number; result: IRes<unknown> }
   | { kind: "authState"; id: number; state: AuthState }
   | { kind: "refreshed"; id: number; ok: boolean }
+  | { kind: "accessToken"; id: number; token?: string }
   | { kind: "void"; id: number }
   | { kind: "failure"; id: number; message: string }
   | { kind: "authChanged"; state: AuthState }

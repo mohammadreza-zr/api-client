@@ -176,3 +176,12 @@ export function storageFor(options: ClientOptions): TokenStorage | undefined {
   if (options.authMode === "cookie") return undefined;
   return resolveStorage(options.storage ?? "memory", options.storageKey ?? "apiclient");
 }
+
+/**
+ * Whether every tab of the origin sees one session: the server's cookie, or
+ * local storage and cookies. Memory and sessionStorage are per tab.
+ */
+export function sharesSession(options: ClientOptions): boolean {
+  const { authMode, storage } = options;
+  return authMode === "cookie" || typeof storage === "object" || storage === "local" || storage === "cookie";
+}

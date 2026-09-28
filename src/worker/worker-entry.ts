@@ -195,6 +195,12 @@ self.onmessage = async (event: MessageEvent<HostMessage>) => {
         break;
       }
 
+      case "accessToken": {
+        if (!client) return send({ kind: "failure", id: msg.id, message: "Worker not initialized" });
+        send({ kind: "accessToken", id: msg.id, token: await client.getAccessToken() });
+        break;
+      }
+
       case "destroy": {
         client?.destroy();
         client = null;

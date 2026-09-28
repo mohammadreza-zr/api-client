@@ -21,6 +21,7 @@
 **Advanced**
 - [[Web Worker Isolation]]
 - [[Multi-Tab Sync]]
+- [[WebSockets and Socket.io]]
 - [[Logging and Observability]]
 - [[Security Model]]
 

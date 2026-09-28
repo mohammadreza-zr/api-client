@@ -43,7 +43,7 @@ Verified, including the rows where this library loses.
 | | axios | ky | @mrzr/api-client |
 |---|---|---|---|
 | Zero runtime dependencies | ✗ | ✓ | ✓ |
-| Bundle, min+gzip | ~14 KB | **~4 KB** | 16.8 KB |
+| Bundle, min+gzip | ~14 KB | **~4 KB** | 17.0 KB |
 | Built on | XHR / node:http | fetch | fetch |
 | Retry with backoff | via `axios-retry` | **✓ built in** | ✗ *(not yet)* |
 | Interceptors / hooks | **✓ global** | **✓ global** | per-request transforms |
@@ -56,7 +56,7 @@ Verified, including the rows where this library loses.
 
 Two honest notes on that table:
 
-- **Size.** 16.8 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even when you pass `worker: false`: a runtime flag can't be tree-shaken away. Worth knowing before you install.
+- **Size.** 17.0 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even when you pass `worker: false`: a runtime flag can't be tree-shaken away. Worth knowing before you install.
 - **Retry.** Not implemented. It has to interact correctly with refresh-and-retry, cancellation and `takeLatest`, and shipping it half-right would be worse than not shipping it.
 
 ---
@@ -70,6 +70,7 @@ Two honest notes on that table:
 - **Opt-in cancellation** — cancel by URL pattern, scope or key on page change or modal close; real aborts, worker mode included
 - **Real upload support** — `FormData`, `File`, `Blob`, typed arrays and streams, with refresh handled mid-upload
 - **CSRF double-submit** — built in, for cookie auth
+- **WebSockets / socket.io** — `getSocketToken(url)` hands a socket a server-issued ticket without exposing the access token; `getAccessToken()` is there behind `exposeTokens: true` ([guide](https://github.com/mohammadreza-zr/api-client/wiki/WebSockets-and-Socket.io))
 - **One request engine** — the worker and main thread run the *same* compiled code, so behaviour can't drift between modes
 - **Runs anywhere** — React, Vue, Svelte, Angular, Next.js, Nuxt, SvelteKit, plain `<script>`, Node 20+, Deno, Bun, Cloudflare Workers
 
@@ -94,7 +95,7 @@ Failures reject with a typed `ApiError`, which is what Query and SWR need to mar
 
 ## 📚 Documentation
 
-Full documentation lives in the **[Wiki](https://github.com/mohammadreza-zr/api-client/wiki)** — 26 pages covering every feature in depth.
+Full documentation lives in the **[Wiki](https://github.com/mohammadreza-zr/api-client/wiki)** — 27 pages covering every feature in depth.
 
 | | |
 |---|---|
@@ -492,6 +493,7 @@ Full guide, with copy-paste recipes for React, Next, Vue, Svelte, Angular, TanSt
 | Option | Default | Description |
 |---|---|---|
 | `baseUrl` | auto-detected | Falls back to an env variable ([list](https://github.com/mohammadreza-zr/api-client/wiki/Client-Options#baseurl-auto-detection)), then the page origin in a browser. On the server with neither, requests fail with a message saying what to set |
+| `exposeTokens` | `false` | Allow `api.getAccessToken()` for a socket server that accepts the API token. Prefer `getSocketToken(url)`, which keeps the token in the worker |
 | `authOrigins` | `[]` | Extra origins allowed to receive the access token and CSRF header. The `baseUrl` origin is always allowed |
 | `timeout` | `30000` | Per-request timeout in ms |
 | `throwError` | `true` | Reject with `ApiError` on failure. Set `false` for the never-throwing envelope. Overridable per request |

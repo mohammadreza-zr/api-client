@@ -302,6 +302,7 @@ interface LogEntry {
 interface ClientOptions {
   baseUrl?: string;
   authOrigins?: string[];
+  exposeTokens?: boolean;
   timeout?: number;
   throwError?: boolean;
 

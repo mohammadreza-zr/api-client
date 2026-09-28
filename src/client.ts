@@ -6,10 +6,12 @@ import type {
   IRes,
   PendingRequest,
   RequestConfig,
+  SocketTokenOptions,
   TokenPair,
 } from "./types";
 import { ApiError } from "./types";
 import { CoreClient } from "./internal/core-client";
+import { extractSocketToken } from "./internal/extract";
 import { storageFor } from "./internal/storage";
 import { hasWorker, isServer, isWorkerScope, resolveBaseUrl } from "./internal/env";
 import { WorkerHost } from "./worker/worker-host";
@@ -46,6 +48,31 @@ export interface ApiClient {
    * the session intact — a blip is not a logout.
    */
   refresh(): Promise<boolean>;
+
+  /**
+   * Asks your server for a WebSocket / socket.io credential and returns it.
+   *
+   * The request is an ordinary authenticated call (token attached, refreshed
+   * on 401), so the access token itself never leaves the worker. The response
+   * may be the token as a string, or `{ token }`, `{ ticket }` or
+   * `{ socketToken }`, optionally wrapped in `{ data }`. Rejects with an
+   * `ApiError` when the call fails or the response carries no token.
+   *
+   * ```ts
+   * const socket = io(URL, {
+   *   auth: async (cb) => cb({ token: await api.getSocketToken("/auth/socket-ticket") }),
+   * });
+   * ```
+   */
+  getSocketToken(url: string, options?: SocketTokenOptions): Promise<string>;
+
+  /**
+   * The current access token, refreshed first when it is about to expire —
+   * for a socket server that accepts the API token itself. Requires
+   * `exposeTokens: true` (rejects otherwise); resolves `undefined` when there
+   * is no usable token, and always in cookie mode, where the token is httpOnly.
+   */
+  getAccessToken(): Promise<string | undefined>;
 
   /** Current auth state. Never contains tokens. */
   getAuthState(): Promise<AuthState>;
@@ -142,6 +169,7 @@ type Implementation = Pick<
   | "logout"
   | "setTokens"
   | "refresh"
+  | "getAccessToken"
   | "getAuthState"
   | "restoreSession"
   | "onAuthStateChange"
@@ -240,6 +268,8 @@ function wrap(impl: Implementation, options: ClientOptions): ApiClient {
     logout: (config) => impl.logout(config),
     setTokens: (tokens) => impl.setTokens(tokens),
     refresh: () => impl.refresh(),
+    getSocketToken: (url, options) => requestSocketToken(client, url, options),
+    getAccessToken: () => impl.getAccessToken(),
     getAuthState: () => impl.getAuthState(),
     restoreSession: (url) => impl.restoreSession(url),
     onAuthStateChange: (listener) => impl.onAuthStateChange(listener),
@@ -254,6 +284,20 @@ function wrap(impl: Implementation, options: ClientOptions): ApiClient {
   } as ApiClient;
 
   return client;
+}
+
+/** Runs the ticket request through the public client, so it behaves like any other call. */
+async function requestSocketToken(client: ApiClient, url: string, options: SocketTokenOptions = {}): Promise<string> {
+  const { method = "POST", ...config } = options;
+  const strict = { ...config, throwError: true, throwOnCancel: true };
+  const res = method === "GET" ? await client.get(url, strict) : await client.post(url, undefined, strict);
+  const token = extractSocketToken(res.data);
+  if (token) return token;
+  throw new ApiError({
+    ...res,
+    status: false,
+    message: `No socket token in the response from ${url}: expected a string, or { token | ticket | socketToken }.`,
+  });
 }
 
 /** Counter behind auto-generated scope names, so anonymous scopes stay distinct. */

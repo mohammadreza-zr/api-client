@@ -232,6 +232,13 @@ export class WorkerHost {
     );
   }
 
+  getAccessToken(): Promise<string | undefined> {
+    return this.route(
+      (client) => client.getAccessToken(),
+      () => this.channel.call<string | undefined>((id) => ({ kind: "accessToken", id })),
+    );
+  }
+
   /**
    * No immediate call with a cached state: the worker hydrates asynchronously,
    * and firing `{ isAuthenticated: false }` first would redirect apps to

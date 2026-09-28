@@ -211,3 +211,12 @@ export function extractUser(body: unknown): unknown {
   }
   return undefined;
 }
+
+const SOCKET_TOKEN_KEYS = ["token", "ticket", "socketToken"] as const;
+
+/** The credential in a socket-ticket response: the body itself, or one of the common keys. */
+export function extractSocketToken(data: unknown): string | undefined {
+  if (typeof data === "string") return data || undefined;
+  if (!data || typeof data !== "object") return undefined;
+  return pick(data as Record<string, unknown>, SOCKET_TOKEN_KEYS);
+}

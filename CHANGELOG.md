@@ -66,6 +66,15 @@ A security and correctness pass. Every fix below has a regression test in
   with `Failed to parse URL from /users`. It now fails with a message naming
   the option and the env variables to set.
 
+### Added
+
+- **WebSockets / socket.io.** `api.getSocketToken(url)` fetches a socket
+  credential from your server through the authenticated client, so the
+  access token never leaves the worker. For socket servers that accept the
+  API token itself, `api.getAccessToken()` returns it (refreshed if about to
+  expire) behind the new `exposeTokens: true` option.
+- `authOrigins`, `responseType` and `IRes.body` (see below).
+
 ### Changed
 
 - **`baseUrl` defaults:** the explicit option, else an env variable, else the

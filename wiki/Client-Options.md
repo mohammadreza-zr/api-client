@@ -16,6 +16,7 @@ const api = createClient({ /* ClientOptions */ });
 |---|---|---|---|
 | **Connection** ||||
 | `baseUrl` | `string` | auto-detected | Prefix for relative URLs. Trailing slashes are normalized. See below |
+| `exposeTokens` | `boolean` | `false` | Allow `api.getAccessToken()`, for a socket server that accepts the API token. Lets page code read the token; prefer `getSocketToken`. See [[WebSockets and Socket.io]] |
 | `authOrigins` | `string[]` | `[]` | Extra origins allowed to receive the access token and CSRF header. The `baseUrl` origin is always allowed; every other absolute URL is sent without them |
 | `timeout` | `number` | `30000` | Per-attempt timeout in ms; `0` disables |
 | `headers` | `Record<string, string>` | `{}` | Merged into every request |

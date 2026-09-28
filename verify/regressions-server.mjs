@@ -1,4 +1,4 @@
-/** HTTP server for verify/regressions.mjs and verify/regressions-worker.mjs. Not part of the package. */
+/** HTTP server for the regression suites and verify/tokens.mjs. Not part of the package. */
 import { createServer } from "node:http";
 
 export const FILE_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00, 0xd8, 0x80]);
@@ -86,6 +86,17 @@ export function start(port) {
     if (path === "/missing") return json(res, 404, { message: "Not found" });
     if (path === "/forbidden") return json(res, 403, { message: "Forbidden" });
     if (path === "/private") return json(res, 401, { message: "Unauthorized" });
+    if (path.startsWith("/socket/")) {
+      // A ticket is only issued to an authenticated caller.
+      if (!req.headers.authorization?.startsWith("Bearer ")) return json(res, 401, { message: "Unauthorized" });
+      if (path === "/socket/ticket") return json(res, 200, { ticket: `ticket-for-${req.method}` });
+      if (path === "/socket/wrapped") return json(res, 200, { data: { token: "wrapped-token" } });
+      if (path === "/socket/plain") {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        return res.end("plain-token");
+      }
+      return json(res, 200, { data: { ok: true } });
+    }
     if (path === "/page") return json(res, 200, { data: [1, 2], meta: { total: 500 } });
     if (path === "/file") {
       res.writeHead(200, { "Content-Type": "application/octet-stream" });

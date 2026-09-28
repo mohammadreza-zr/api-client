@@ -40,6 +40,8 @@ Each suite starts its own real `node:http` server (`verify/server.mjs`, `verify/
 
 **Crossing the worker boundary.** Anything sent to the worker must be structured-cloneable. Function options are either served from the host over the bridge (`storage` and CSRF: the worker sends `storage` / `csrf` messages and the host answers) or they force inline mode.
 
+**Token exposure.** Only `getAccessToken()` returns a token to page code, and only when `exposeTokens: true` — enforced inside `CoreClient`, so in worker mode the worker itself refuses. `getSocketToken()` is a plain request built in `client.ts`, returning the server's ticket, never the access token.
+
 **Token trust.** The engine attaches `Authorization` and the CSRF header only when the final URL is relative or its origin is the `baseUrl` origin or in `authOrigins` (`internal/origin.ts`). Never attach credentials anywhere else.
 
 **Refresh** (`src/internal/refresh.ts`) coalesces concurrent 401s onto one shared promise (`AuthStore.coalesceRefresh`), runs under a cross-tab Web Lock, adopts a sibling tab's fresh tokens instead of re-spending a rotating refresh token, has the client timeout, and sends CSRF. `AuthStore.generation` bumps on logout/login/`setTokens`; a refresh that started under an older generation must not write back. Only an auth rejection (401/403) from the refresh endpoint clears the session. 5xx, timeouts and network failures leave it intact. Test refresh changes with N concurrent 401s, not one.

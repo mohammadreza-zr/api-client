@@ -91,7 +91,7 @@ npm run verify     # build, every suite, then the packaging suite
 npm test           # every suite except packaging, against the current dist/
 ```
 
-Twelve suites, **570 assertions**, all against real `node:http` servers — no mocked `fetch`, because the whole point is verifying real network behaviour. `npm test` is the one list of suites: CI and the release workflow run it too.
+Thirteen suites, **594 assertions**, all against real `node:http` servers — no mocked `fetch`, because the whole point is verifying real network behaviour. `npm test` is the one list of suites: CI and the release workflow run it too.
 
 | Suite | Covers |
 |---|---|
@@ -106,6 +106,7 @@ Twelve suites, **570 assertions**, all against real `node:http` servers — no m
 | `cancel-worker.mjs` | The same, through the real worker bundle — including that the socket really closes |
 | `regressions.mjs` | The security/correctness audit: token origins, URL encoding, refresh races and timeouts, session state, binary responses, cross-tab refresh |
 | `regressions-worker.mjs` | The audit's worker-mode cases: CSRF bridge, boot fallback, destroy during boot, relative `baseUrl` |
+| `tokens.mjs` | `getSocketToken` and the opt-in `getAccessToken`, in both modes |
 | `package.mjs` | Tarball contents, exports map, type resolution, the `prepare` hook |
 
 Some assertions are labelled `[documented]` — they lock in behaviour that is surprising but intentional, such as *"an envelope-style 500 looks like SUCCESS to react-query"*. Don't delete them; they're the argument for the current defaults.

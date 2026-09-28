@@ -42,7 +42,7 @@ Including the rows where this library loses.
 | | axios | ky | @mrzr/api-client |
 |---|---|---|---|
 | Zero runtime dependencies | ✗ | ✓ | ✓ |
-| Bundle, min+gzip | ~14 KB | **~4 KB** | 16.8 KB |
+| Bundle, min+gzip | ~14 KB | **~4 KB** | 17.0 KB |
 | Built on | XHR / node:http | fetch | fetch |
 | Retry with backoff | via `axios-retry` | **✓ built in** | ✗ *(not yet)* |
 | Interceptors / hooks | **✓ global** | **✓ global** | per-request transforms |
@@ -53,7 +53,7 @@ Including the rows where this library loses.
 | **Cancel by URL pattern / scope** | ✗ | ✗ | **✓** |
 | CSRF double-submit | partial | ✗ | ✓ |
 
-- **Size.** 16.8 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even with `worker: false` — a runtime flag can't be tree-shaken.
+- **Size.** 17.0 KB is a little over axios and 4× ky. About half of it is the inlined worker (9 KB gzipped on its own), which ships even with `worker: false` — a runtime flag can't be tree-shaken.
 - **Retry.** Not implemented. It has to interact correctly with refresh-and-retry, cancellation and `takeLatest`; shipping it half-right would be worse than not shipping it.
 
 ---
@@ -111,6 +111,7 @@ Failures reject with a typed `ApiError`, which is what Query and SWR need to mar
 ### Advanced
 - **[[Web Worker Isolation]]** — how it works, what it protects, when it disables itself
 - **[[Multi-Tab Sync]]** — BroadcastChannel, cross-tab refresh lock
+- **[[WebSockets and Socket.io]]** — hand a socket its credential without exposing the token
 - **[[Logging and Observability]]** — `log`, `onLog`, `onError`
 - **[[Security Model]]** — the threat model, honestly stated
 

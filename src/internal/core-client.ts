@@ -25,12 +25,8 @@ import { executeRequest, type EngineContext } from "./engine";
 import { extractUser, normalizeExtractor, normalizeRefreshBody } from "./extract";
 import { trustedOrigins } from "./origin";
 import { runRefresh } from "./refresh";
+import { sharesSession } from "./storage";
 import { joinUrl } from "./url";
-
-/** Local storage and cookies are visible to every tab; memory and sessionStorage are not. */
-function isSharedStorage(storage: ClientOptions["storage"]): boolean {
-  return typeof storage === "object" || storage === "local" || storage === "cookie";
-}
 
 /**
  * The full client implementation.
@@ -55,6 +51,7 @@ export class CoreClient {
   private trusted: ReadonlySet<string>;
   private sharedSession: boolean;
   private siblingRefreshedAt = 0;
+  private exposeTokens: boolean;
   private hooks: Pick<ClientOptions, "onAuthStateChanged" | "onAuthFailure" | "onError" | "onLog">;
   private hydrated: Promise<void>;
   private disposed = false;
@@ -88,17 +85,13 @@ export class CoreClient {
     this.xsrfHeaderName = options.xsrfHeaderName ?? "X-CSRF-Token";
     this.readCsrf = createCsrfReader(options);
     this.trusted = trustedOrigins(this.opts.baseUrl, options.authOrigins);
-    this.sharedSession = authMode === "cookie" || isSharedStorage(options.storage);
+    this.sharedSession = sharesSession(options);
+    this.exposeTokens = options.exposeTokens === true;
     // Accepts both the function forms and the declarative (serializable)
     // TokenFieldMap / RefreshBodyConfig forms.
     this.extractTokens = normalizeExtractor(options.extractTokens);
     this.buildRefreshBody = normalizeRefreshBody(options.buildRefreshBody);
-    this.hooks = {
-      onAuthStateChanged: options.onAuthStateChanged,
-      onAuthFailure: options.onAuthFailure,
-      onError: options.onError,
-      onLog: options.onLog,
-    };
+    this.hooks = options;
 
     const storageKey = options.storageKey ?? "apiclient";
     // Cookie mode keeps tokens server-side; nothing to persist locally.
@@ -432,6 +425,20 @@ export class CoreClient {
     // No probe URL: a successful refresh proves the cookie is still valid.
     await this.refresh();
     return this.auth.state;
+  }
+
+  /** See `ApiClient.getAccessToken`. Enforced here, so in worker mode the worker itself refuses. */
+  async getAccessToken(): Promise<string | undefined> {
+    if (!this.exposeTokens) {
+      throw new Error(
+        "getAccessToken() needs createClient({ exposeTokens: true }). " +
+          "If your socket server can issue its own ticket, use api.getSocketToken(url) instead.",
+      );
+    }
+    await this.hydrated;
+    if (this.opts.authMode === "cookie") return undefined;
+    if (this.auth.refreshToken && this.auth.isExpired(this.opts.refreshSkewMs)) await this.refresh();
+    return this.auth.isExpired() ? undefined : this.auth.accessToken;
   }
 
   async getAuthState(): Promise<AuthState> {

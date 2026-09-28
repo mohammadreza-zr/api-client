@@ -27,6 +27,7 @@ export type {
   RefreshBodyConfig,
   RequestConfig,
   ResponseFormat,
+  SocketTokenOptions,
   StorageKind,
   TokenExtractor,
   TokenFieldMap,

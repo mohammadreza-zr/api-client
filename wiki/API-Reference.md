@@ -121,6 +121,22 @@ if (!ok && !(await api.getAuthState()).isAuthenticated) redirectToLogin();
 
 ---
 
+### `getSocketToken(url, options?)`
+
+```ts
+getSocketToken(url: string, options?: SocketTokenOptions): Promise<string>;
+```
+
+Calls your endpoint through the client (authenticated, refreshed on 401; `POST` unless `options.method` is `"GET"`) and returns the socket credential it answers with: a plain string, or `{ token | ticket | socketToken }`, optionally under `data`. Rejects with an `ApiError` on failure or when no token is found. The access token never leaves the worker. See [[WebSockets and Socket.io]].
+
+### `getAccessToken()`
+
+```ts
+getAccessToken(): Promise<string | undefined>;
+```
+
+The current access token, refreshed first when it expires within `refreshSkewMs`. Requires `exposeTokens: true` and rejects otherwise; `undefined` without a usable token and in cookie mode. See [[WebSockets and Socket.io]] for the trade-off.
+
 ### `getAuthState()`
 
 ```ts

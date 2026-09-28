@@ -387,6 +387,12 @@ export interface RequestConfig<T = unknown>
   beforeSelectOptions?: (data: T) => unknown;
 }
 
+/** Options for `api.getSocketToken()`: a normal request config, plus the method. */
+export interface SocketTokenOptions extends RequestConfig<unknown> {
+  /** Default `"POST"`: issuing a ticket usually changes server state, and gets CSRF protection. */
+  method?: "GET" | "POST";
+}
+
 // ── Auth ─────────────────────────────────────────────────
 
 /** Auth state broadcast to the app. Never contains tokens. */
@@ -494,6 +500,17 @@ export interface ClientOptions {
    * request to a third party (or one injected by XSS) can't read the token.
    */
   authOrigins?: string[];
+
+  /**
+   * Allow `api.getAccessToken()`, for a WebSocket or socket.io server that
+   * accepts the same token as the API. Default `false`.
+   *
+   * Enabling it lets main-thread code — including injected script — read the
+   * token, which worker isolation otherwise prevents. When the socket server
+   * can issue its own ticket, prefer `api.getSocketToken(url)`, which needs no
+   * opt-in and keeps the access token inside the worker.
+   */
+  exposeTokens?: boolean;
 
   /** Default request timeout in ms. Default `30000`. */
   timeout?: number;

@@ -11,6 +11,7 @@ An honest account of what this client protects against, and what it doesn't.
 | **Token theft via XSS** | Worker isolation + memory storage | **Strong** — no readable variable, no storage key |
 | **Token use via XSS** | None | **None** — see below |
 | **Token sent to another origin** | Token and CSRF header only go to the `baseUrl` origin and `authOrigins` | **Strong** — an injected or third-party URL gets no credentials |
+| **Token read by page code** | `getAccessToken()` refused unless `exposeTokens: true`; sockets get a server-issued ticket via `getSocketToken()` | **Strong** unless you opt in |
 | **Path injection via URL values** | `addTemplateToUrl` / `addToUrl` values encoded as one segment | **Strong** |
 | **CSRF** | Double-submit header mirroring | **Strong**, if your server enforces it |
 | **Token leakage in logs** | Tokens never enter `LogEntry`, `AuthState` or tab messages | **Strong** |
