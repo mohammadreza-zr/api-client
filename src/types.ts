@@ -1,3 +1,5 @@
+import type { ApiPlugin } from "./plugin";
+
 /**
  * Public type surface.
  * Everything a consumer can import is declared here.
@@ -512,6 +514,12 @@ export interface ClientOptions {
    * opt-in and keeps the access token inside the worker.
    */
   exposeTokens?: boolean;
+
+  /**
+   * Optional add-ons, applied in order. They run on the page, around each
+   * request, and never see the access token. See `ApiPlugin`.
+   */
+  plugins?: readonly ApiPlugin[];
 
   /** Default request timeout in ms. Default `30000`. */
   timeout?: number;

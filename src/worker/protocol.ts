@@ -43,6 +43,7 @@ export type SerializableOptions = Omit<
    * that can never be queried.
    */
   | "cancel"
+  | "plugins"
 > & {
   storage?: Exclude<ClientOptions["storage"], object>;
   /** Only the declarative form can cross; a function extractor disables worker mode. */

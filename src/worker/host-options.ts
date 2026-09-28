@@ -15,6 +15,8 @@ export function toSerializableOptions(options: ClientOptions, baseUrl: string): 
     getCsrfToken,
     // Cancellation is tracked on the host, which forwards `abort` messages.
     cancel: _g,
+    // Plugins are functions and run on the host, around each call.
+    plugins: _plugins,
     ...rest
   } = options;
 

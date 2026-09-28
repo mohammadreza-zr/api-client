@@ -77,6 +77,8 @@ export function start(port) {
       auth: req.headers.authorization ?? null,
       csrf: req.headers["x-csrf-token"] ?? null,
       ct: req.headers["content-type"] ?? null,
+      tenant: req.headers["x-tenant"] ?? null,
+      trace: req.headers["x-trace"] ?? null,
     });
 
     if (path === "/auth/refresh") return refresh(req, res);

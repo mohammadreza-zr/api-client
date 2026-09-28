@@ -3,6 +3,7 @@ import type {
   CancelScope,
   CancelSelector,
   ClientOptions,
+  HttpMethod,
   IRes,
   PendingRequest,
   RequestConfig,
@@ -16,6 +17,14 @@ import { storageFor } from "./internal/storage";
 import { hasWorker, isServer, isWorkerScope, resolveBaseUrl } from "./internal/env";
 import { WorkerHost } from "./worker/worker-host";
 import { WORKER_SOURCE } from "./worker/worker-source";
+import {
+  configureWith,
+  extendWith,
+  sendThrough,
+  type ApiPlugin,
+  type PluginExtensions,
+  type PluginRequest,
+} from "./plugin";
 
 /**
  * The client returned by `createClient`.
@@ -199,7 +208,11 @@ type Implementation = Pick<
  * const { data, status } = await api.get<User[]>("/users");
  * ```
  */
-export function createClient(options: ClientOptions = {}): ApiClient {
+export function createClient<const P extends readonly ApiPlugin[] = []>(
+  clientOptions: ClientOptions & { plugins?: P } = {},
+): ApiClient & PluginExtensions<P> {
+  const plugins = clientOptions.plugins ?? [];
+  const options = configureWith(plugins, clientOptions);
   const wantsWorker = options.worker !== false;
   const canUseWorker =
     wantsWorker &&
@@ -218,19 +231,31 @@ export function createClient(options: ClientOptions = {}): ApiClient {
     typeof options.extractTokens !== "function" &&
     typeof options.buildRefreshBody !== "function";
 
+  let impl: Implementation | undefined;
   if (canUseWorker) {
     try {
-      return wrap(new WorkerHost(options), options);
+      impl = new WorkerHost(options);
     } catch {
       // Blob workers are blocked by some CSPs — fall back silently.
     }
   }
+  impl ??= new CoreClient({ ...options, baseUrl: resolveBaseUrl(options.baseUrl) }, storageFor(options));
 
-  return wrap(new CoreClient({ ...options, baseUrl: resolveBaseUrl(options.baseUrl) }, storageFor(options)), options);
+  const client = wrap(impl, options, plugins);
+  extendWith(client, plugins);
+  return client as ApiClient & PluginExtensions<P>;
+}
+
+/** Calls the implementation's verb for a request that may have been rewritten by plugins. */
+function dispatch(impl: Implementation, { method, url, body, config }: PluginRequest): Promise<IRes<unknown>> {
+  if (method === "GET") return impl.get(url, config);
+  if (method === "DELETE") return impl.delete(url, config);
+  const verb = method.toLowerCase() as Lowercase<Exclude<HttpMethod, "GET" | "DELETE">>;
+  return impl[verb](url, body, config);
 }
 
 /** Applies `throwError` uniformly on top of either implementation. */
-function wrap(impl: Implementation, options: ClientOptions): ApiClient {
+function wrap(impl: Implementation, options: ClientOptions, plugins: readonly ApiPlugin[]): ApiClient {
   // Throwing by default is what react-query, SWR and Vue Query expect.
   const throwByDefault = options.throwError !== false;
 
@@ -258,12 +283,18 @@ function wrap(impl: Implementation, options: ClientOptions): ApiClient {
     return result;
   };
 
+  const call = <R>(method: HttpMethod, url: string, body: unknown, config?: RequestConfig<R>): Promise<IRes<R>> => {
+    const request: PluginRequest = { method, url, body, config: config as RequestConfig<unknown> | undefined };
+    const run = plugins.length ? sendThrough(plugins, request, (r) => dispatch(impl, r)) : dispatch(impl, request);
+    return guard(() => run as Promise<IRes<R>>, config);
+  };
+
   const client: ApiClient = {
-    get: (url, config) => guard(() => impl.get(url, config), config),
-    post: (url, body, config) => guard(() => impl.post(url, body, config), config),
-    put: (url, body, config) => guard(() => impl.put(url, body, config), config),
-    patch: (url, body, config) => guard(() => impl.patch(url, body, config), config),
-    delete: (url, config) => guard(() => impl.delete(url, config), config),
+    get: (url, config) => call("GET", url, undefined, config),
+    post: (url, body, config) => call("POST", url, body, config),
+    put: (url, body, config) => call("PUT", url, body, config),
+    patch: (url, body, config) => call("PATCH", url, body, config),
+    delete: (url, config) => call("DELETE", url, undefined, config),
     login: (body, config) => guard(() => impl.login(body, config), config),
     logout: (config) => impl.logout(config),
     setTokens: (tokens) => impl.setTokens(tokens),

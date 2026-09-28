@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "main": "../dist/services.cjs",
+  "module": "../dist/services.js",
+  "types": "../dist/services.d.ts"
+}
