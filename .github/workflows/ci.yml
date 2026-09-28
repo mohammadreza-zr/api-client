@@ -37,12 +37,7 @@ jobs:
             - run: npm run build
 
             # The suites, run against real node:http servers — not mocked fetch.
-            - run: node verify/run.mjs
-            - run: node verify/worker.mjs
-            - run: node verify/audit.mjs
-            - run: node verify/features.mjs
-            - run: node verify/cancel.mjs
-            - run: node verify/cancel-worker.mjs
+            - run: npm test
 
     package:
         name: package
@@ -65,3 +60,6 @@ jobs:
 
             - name: Inspect tarball contents
               run: npm pack --dry-run
+
+            - name: Install the packed tarball like a consumer
+              run: node verify/package.mjs
