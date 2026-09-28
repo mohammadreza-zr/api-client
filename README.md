@@ -1,7 +1,5 @@
 # @mrzr/api-client
 
-**The HTTP layer under TanStack Query, SWR and Vue Query — it handles authentication so they don't have to.**
-
 A TypeScript-first API client focused on secure browser auth: coalesced token refresh, Web Worker token isolation, and cross-tab session sync. Zero runtime dependencies, works in every JS runtime.
 
 ```bash
@@ -22,8 +20,6 @@ const { data } = await api.get<User[]>("/users");
 
 ## Is this for you?
 
-Most HTTP clients treat auth as something you bolt on with interceptors. This one treats it as the product.
-
 **Use it if** any of these are real problems for you:
 
 - Your access token expires and 20 concurrent requests each fire their own refresh
@@ -32,13 +28,11 @@ Most HTTP clients treat auth as something you bolt on with interceptors. This on
 - You use httpOnly cookies and can't tell on page load whether a session exists
 - You need refresh to work *during* a five-minute file upload
 
-**Use something else if not.** If you just want a small `fetch` wrapper, [**ky**](https://github.com/sindresorhus/ky) is excellent — a third of the size, built-in retry, and a lovely API. If you need broad legacy support and the biggest ecosystem, use axios. Neither is trying to solve browser auth, and this isn't trying to out-ky ky.
+**Use something else if not.** For a small `fetch` wrapper with built-in retry, use [ky](https://github.com/sindresorhus/ky). For the widest legacy support and ecosystem, use axios. Neither focuses on browser auth.
 
 ---
 
 ## How it compares
-
-Verified, including the rows where this library loses.
 
 | | axios | ky | @mrzr/api-client |
 |---|---|---|---|
@@ -113,7 +107,7 @@ try {
 }
 ```
 
-That's it. Worker isolation, refresh and tab sync are on by default and degrade automatically where unsupported.
+Worker isolation, token refresh and tab sync are on by default, and turn themselves off where the runtime doesn't support them.
 
 ---
 

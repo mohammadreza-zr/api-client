@@ -1,7 +1,7 @@
 {
   "name": "@mrzr/api-client",
   "version": "3.0.0",
-  "description": "The HTTP layer under TanStack Query, SWR and Vue Query — it handles auth so they don't have to. Coalesced token refresh, Web Worker token isolation, cross-tab session sync. Zero dependencies.",
+  "description": "A TypeScript API client built on fetch, focused on browser auth: coalesced token refresh, Web Worker token isolation and cross-tab session sync. Zero dependencies.",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
