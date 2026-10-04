@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Office files were decoded as text.** With `responseType: "auto"`, a
+  `content-type` was treated as textual when the letters `xml` appeared
+  anywhere in it, so `application/vnd.openxmlformats-officedocument.*`
+  (xlsx, docx, pptx) was read as a string and the file was corrupted. The
+  same happened when a parameter contained such a word, as in
+  `application/octet-stream; name="report.xml"`. A type is now textual only
+  when `json`, `xml`, `yaml`, … is its subtype or structured suffix
+  (`application/json`, `image/svg+xml`); these files resolve as a `Blob`.
+- **A failed download lost the server's error.** With `responseType: "blob"`
+  or `"arrayBuffer"`, a `4xx` / `5xx` JSON or text body was also read as
+  binary, so `message` and `errors` were empty and `ApiError.data` was a
+  `Blob`. A failed response with a textual `content-type` is now parsed as
+  in `"auto"`. An error with a binary `content-type` keeps the requested
+  format.
+
 ## 3.0.1 - 2026-09-28
 
 Documentation only; no code changes.

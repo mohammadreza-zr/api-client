@@ -47,6 +47,17 @@ try {
   const bytes = Buffer.from(await file.data.arrayBuffer());
   check("binary responses cross the boundary byte-exact", bytes.equals(FILE_BYTES));
 
+  const xlsx = await api.get("/typed", {
+    params: { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+  });
+  const xlsxExact = xlsx.data instanceof Blob && Buffer.from(await xlsx.data.arrayBuffer()).equals(FILE_BYTES);
+  check("an xlsx crosses the boundary as a byte-exact Blob", xlsxExact, typeof xlsx.data);
+  const failedExport = await api.get("/typed", {
+    params: { type: "application/json", status: 400, json: 1 },
+    responseType: "blob",
+  });
+  check("a failed blob download keeps the server message", failedExport.message === "Export failed", failedExport.message);
+
   const roles = client({ loginUrl: "/login-with-roles" });
   const login = await roles.login({});
   check("login strips tokens from the result", login.data?.access === undefined && login.data?.refresh === undefined);

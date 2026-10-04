@@ -131,6 +131,54 @@ try {
   const stalled = await within(api.get("/stall-body", { timeout: 400 }), 3000);
   check("the timeout covers the body download", stalled.statusCode === 408, JSON.stringify(stalled.statusCode));
 
+  console.log("\nbinary content types");
+  const typed = (type, extra = {}, config) => api.get("/typed", { params: { type, ...extra }, ...config });
+  const OFFICE = "application/vnd.openxmlformats-officedocument.";
+  const BINARY_TYPES = [
+    `${OFFICE}spreadsheetml.sheet`,
+    `${OFFICE}wordprocessingml.document`,
+    `${OFFICE}presentationml.presentation`,
+    "application/vnd.ms-excel",
+    "application/pdf",
+    "application/zip",
+    'application/octet-stream; name="report.xml"',
+  ];
+  for (const type of BINARY_TYPES) {
+    const res = await typed(type);
+    const exact = res.data instanceof Blob && Buffer.from(await res.data.arrayBuffer()).equals(FILE_BYTES);
+    check(`${type} arrives as a byte-exact Blob`, exact, typeof res.data);
+  }
+  const TEXT_TYPES = [
+    "application/json; charset=utf-8",
+    "application/problem+json",
+    "application/x-ndjson",
+    "application/xml",
+    "image/svg+xml",
+    "application/x-yaml",
+    "application/javascript",
+    "text/csv",
+  ];
+  for (const type of TEXT_TYPES) {
+    const res = await typed(type, { json: 1 });
+    check(`${type} is still read as text`, res.message === "Export failed", typeof res.data);
+  }
+
+  console.log("\nerror body of a file download");
+  for (const responseType of ["blob", "arrayBuffer"]) {
+    const failed = await typed("application/json", { status: 400, json: 1 }, { responseType });
+    check(`${responseType}: a JSON error keeps the server message`, failed.message === "Export failed", failed.message);
+    check(`${responseType}: a JSON error keeps errors`, failed.errors?.range?.[0] === "too wide");
+    check(`${responseType}: a JSON error is parsed, not a Blob`, failed.data?.message === "Export failed");
+  }
+  const thrown = await rejectionOrValue(
+    typed("application/json", { status: 503, json: 1 }, { responseType: "blob", throwError: true }),
+  );
+  check("ApiError carries the parsed error body", thrown?.data?.message === "Export failed" && thrown.statusCode === 503);
+  const binaryError = await typed("application/pdf", { status: 500 }, { responseType: "blob" });
+  check("a binary error body stays a Blob", binaryError.data instanceof Blob && binaryError.statusCode === 500);
+  const okBlob = await typed("application/json", { json: 1 }, { responseType: "blob" });
+  check("a successful response keeps the requested format", okBlob.data instanceof Blob);
+
   console.log("\nContent-Type only with a body");
   await api.get("/ct-get");
   await api.delete("/ct-delete");

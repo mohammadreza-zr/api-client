@@ -36,7 +36,7 @@ await api.get<User>("/users/{id}", { /* RequestConfig<User> */ });
 | `refreshTokenCheck` | `boolean` | `true` | `false` disables the 401 → refresh → retry flow |
 | `uploadSkewMs` | `number` | – | Refresh before sending if the token dies within this window |
 | **Response shaping** ||||
-| `responseType` | `"auto" \| "json" \| "text" \| "blob" \| "arrayBuffer"` | `"auto"` | How to read the body. `"auto"` parses JSON, reads textual types as text, and returns anything else as a `Blob` |
+| `responseType` | `"auto" \| "json" \| "text" \| "blob" \| "arrayBuffer"` | `"auto"` | How to read the body. `"auto"` parses JSON, reads textual types as text, and returns anything else as a `Blob`. With `"blob"` / `"arrayBuffer"`, a failed response with a textual body is still parsed as in `"auto"` |
 | `fullData` | `boolean` | `false` | Return the raw body instead of unwrapping `{ data }` (the whole body is on `res.body` either way) |
 | `beforeSelectOptions` | `(data: T) => unknown` | – | Transform the payload on success; runs before `afterFunc` |
 | `afterFunc` | `(data: T) => unknown` | – | Transform the payload on success |

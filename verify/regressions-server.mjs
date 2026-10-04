@@ -112,6 +112,13 @@ export function start(port) {
       res.writeHead(200, { "Content-Type": "application/octet-stream" });
       return res.end(FILE_BYTES);
     }
+    if (path === "/typed") {
+      // Answers with whatever content type and status the test asks for.
+      const query = url.searchParams;
+      res.writeHead(Number(query.get("status") ?? 200), { "Content-Type": query.get("type") });
+      const failure = { message: "Export failed", errors: { range: ["too wide"] } };
+      return res.end(query.has("json") ? JSON.stringify(failure) : FILE_BYTES);
+    }
     if (path === "/stall-body") {
       // Headers and half a body, then silence: only a timeout covering the body can end this.
       res.writeHead(200, { "Content-Type": "application/json" });

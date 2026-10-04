@@ -69,7 +69,19 @@ export function headersToObject(headers: Headers): Record<string, string> {
   return out;
 }
 
-const TEXTUAL_TYPE = /json|^text\/|xml|javascript|x-www-form-urlencoded|csv|yaml|graphql|event-stream/i;
+/**
+ * Subtypes that are text. Each name must be a whole token of the subtype
+ * (`application/json`, `image/svg+xml`, `application/x-ndjson`): searching for
+ * the bare letters also matched `application/vnd.openxmlformats-…` — every
+ * xlsx, docx and pptx — and decoded those zip files as text.
+ */
+const TEXTUAL_TYPE =
+  /^text\/|[/+.-](?:json|ndjson|jsonl|json5|xml|yaml|javascript|ecmascript|csv|graphql|urlencoded|event-stream)(?:[+-]|$)/;
+
+/** Whether a `content-type` names a text format. Parameters (`charset`, `name`) are ignored. */
+export function isTextualType(contentType: string): boolean {
+  return TEXTUAL_TYPE.test((contentType.split(";")[0] ?? "").trim().toLowerCase());
+}
 
 function parseJsonText(text: string): unknown {
   if (!text) return undefined;
@@ -92,13 +104,19 @@ function parseJsonText(text: string): unknown {
 export async function parseBody(response: Response, format: ResponseFormat = "auto"): Promise<unknown> {
   if (response.status === 204 || response.status === 205) return undefined;
 
+  const type = response.headers.get("content-type") ?? "";
+  // A binary format describes the file a success returns. A failed download
+  // usually answers with a JSON or text error, which must stay readable so
+  // `message`, `errors` and `ApiError.data` are filled in.
+  const binary = format === "blob" || format === "arrayBuffer";
+  if (binary && !response.ok && isTextualType(type)) format = "auto";
+
   if (format === "blob") return response.blob();
   if (format === "arrayBuffer") return response.arrayBuffer();
   if (format === "text") return response.text();
   if (format === "json") return parseJsonText(await response.text());
 
-  const type = response.headers.get("content-type") ?? "";
-  if (type && !TEXTUAL_TYPE.test(type)) {
+  if (type && !isTextualType(type)) {
     return typeof Blob !== "undefined" ? response.blob() : response.arrayBuffer();
   }
   return parseJsonText(await response.text());

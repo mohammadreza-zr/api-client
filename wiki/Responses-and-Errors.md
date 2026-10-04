@@ -56,6 +56,10 @@ With the default `responseType: "auto"` the parser is deliberately forgiving:
 
 So a plain-text `500 Internal Server Error` page never crashes your error handler. Pass `responseType: "json" | "text" | "blob" | "arrayBuffer"` to choose the format yourself.
 
+A `content-type` counts as textual when it is `text/*`, or when its subtype or structured suffix is `json`, `xml`, `yaml`, `javascript`, `csv`, `graphql`, `ndjson`, `x-www-form-urlencoded` or `event-stream` — for example `application/json`, `application/problem+json`, `image/svg+xml`. Parameters such as `charset` are ignored. Office files (`application/vnd.openxmlformats-officedocument.*`: xlsx, docx, pptx) are binary and resolve as a `Blob`.
+
+`responseType: "blob"` and `"arrayBuffer"` describe the file a successful response returns. When the response fails (`4xx` / `5xx`) with a textual `content-type`, the body is read as in `"auto"` instead, so `message`, `errors` and `ApiError.data` hold the server's error and not a `Blob`. An error with a binary `content-type` keeps the requested format.
+
 A body that fails mid-download — the connection drops, the request is canceled, or the timeout fires — fails the request (`408` for a timeout). A truncated body is never reported as a success.
 
 ### Where `message` and `errors` come from
