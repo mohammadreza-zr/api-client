@@ -2,8 +2,26 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A `FormData` body failed in worker mode.** `FormData` can't be
+  structured-cloned, so `postMessage` threw a `DataCloneError` ("Cannot clone
+  object of unsupported type"). It now crosses the worker boundary as its
+  entries and is rebuilt on the other side, keeping repeated keys, file names
+  and types.
+
 ### Added
 
+- **`isFormData: true` builds the `FormData` for you.** When the body is a
+  plain object, it is converted to `FormData` before sending: `File`, `Blob`,
+  `ArrayBuffer` and typed-array values (and a `FileList`) are appended as
+  files, an array appends one entry per item under the same key, `null` and
+  `undefined` are skipped, a `Date` becomes an ISO string (an invalid one is
+  skipped), a nested object becomes a JSON string and other values become
+  text. The conversion happens once, so a 401 retry resends the same form, and
+  it works in worker mode too. A real `FormData`, a string or bytes is sent
+  untouched, as before. A file or bytes inside a nested object fails before
+  anything is sent, naming the field, instead of being uploaded as `{}`.
 - **`AuthState.sessionExpired`.** Becomes `true` when the refresh endpoint
   rejects the session (401/403), in this tab or a sibling one, so the app can
   tell "your session expired" apart from a user logout or a first visit. It

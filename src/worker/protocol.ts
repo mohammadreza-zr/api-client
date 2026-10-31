@@ -8,6 +8,7 @@ import type {
   TokenFieldMap,
   TokenPair,
 } from "../types";
+import type { FormEntries } from "../internal/body";
 
 /**
  * Worker wire protocol.
@@ -76,10 +77,19 @@ export type SerializableConfig = Omit<
 
 export type HostMessage =
   | { kind: "init"; options: SerializableOptions }
-  | { kind: "request"; id: number; method: HttpMethod; url: string; body?: unknown; config?: SerializableConfig }
+  | {
+      kind: "request";
+      id: number;
+      method: HttpMethod;
+      url: string;
+      body?: unknown;
+      /** A `FormData` body, as entries: the object itself cannot cross the boundary. */
+      form?: FormEntries;
+      config?: SerializableConfig;
+    }
   /** `reason` is carried so the worker can report *why* it was canceled. */
   | { kind: "abort"; id: number; reason?: string }
-  | { kind: "login"; id: number; body: unknown; config?: SerializableConfig }
+  | { kind: "login"; id: number; body?: unknown; form?: FormEntries; config?: SerializableConfig }
   | { kind: "logout"; id: number; config?: SerializableConfig }
   | { kind: "setTokens"; id: number; tokens: TokenPair }
   | { kind: "authState"; id: number }

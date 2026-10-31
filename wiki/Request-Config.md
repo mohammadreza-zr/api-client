@@ -20,7 +20,7 @@ await api.get<User>("/users/{id}", { /* RequestConfig<User> */ });
 | **Headers & body** ||||
 | `headers` | `Record<string, string>` | – | Merged over the client headers |
 | `stringifyBody` | `boolean` | `true` | `false` passes the body to `fetch` untouched |
-| `isFormData` | `boolean` | auto | Force multipart handling (drops `Content-Type`) |
+| `isFormData` | `boolean` | auto | Send as multipart (drops `Content-Type`); a plain-object body is converted to `FormData` |
 | `duplex` | `"half"` | `"half"` | Set automatically for `ReadableStream` bodies |
 | **Timing** ||||
 | `timeout` | `number` | `30000` | Per-attempt timeout in ms, covering the body download; `0` disables |
@@ -194,8 +194,40 @@ await api.get("/products", { throwOnCancel: true });   // opt back in
 Both are escape hatches; detection is automatic for all standard body types.
 
 - `stringifyBody: false` → pass the body to `fetch` untouched.
-- `isFormData: true` → treat the body as multipart and drop the `Content-Type` header so the runtime can generate the boundary.
+- `isFormData: true` → treat the body as multipart and drop the `Content-Type` header so the runtime can generate the boundary. A plain-object body is converted to `FormData` for you.
 
-Use them for exotic body objects the detector can't recognise (a polyfilled `FormData`, for example).
+Use `stringifyBody: false` for exotic body objects the detector can't recognise (a polyfilled `FormData`, for example).
+
+#### Plain object → `FormData`
+
+```ts
+await api.post(
+  "/profile",
+  {
+    name: "Ada",
+    age: 36,
+    avatar: fileInput.files[0],        // File / Blob → a file part
+    documents: [file1, file2],         // array → one `documents` part per item
+    tags: ["a", "b"],                  // array → one `tags` part per item
+    settings: { theme: "dark" },       // nested object → JSON string
+    nickname: undefined,               // null / undefined → skipped
+  },
+  { isFormData: true },
+);
+```
+
+| Value | Sent as |
+|---|---|
+| `File`, `Blob`, `ArrayBuffer`, typed array | A file part (a `File` keeps its name; bytes are sent as they are, a view only its own range) |
+| Array, `Set`, `FileList` | One part per item under the same key; an empty array adds nothing |
+| `string`, `number`, `boolean`, `bigint` | Text |
+| `URLSearchParams` | Its query string |
+| `Date` | ISO 8601 string; an invalid date is skipped |
+| Nested object | `JSON.stringify` text (`bigint` as a string, `Map` as an object, `Set` as an array). There is no `a[b]` bracket notation because servers disagree on its shape |
+| `null`, `undefined`, functions, symbols | Skipped |
+
+The form is built once per call, so a 401 → refresh → retry resends the same body, and it works in worker mode (a `File` survives the structured clone). Pass a real or polyfilled `FormData`, a string, bytes or a class instance and nothing is rebuilt: only an object literal is converted.
+
+A file or bytes **inside a nested object** can't be written as text, so the call fails before anything is sent, with a message naming the field (as does a circular value or a stream). Move files to the top level of the body, or into a top-level array.
 
 Next: **[[Responses and Errors]]**

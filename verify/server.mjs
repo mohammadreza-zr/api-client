@@ -110,6 +110,14 @@ export function start(port = 4599) {
       });
     }
 
+    // Returns the raw request bytes, for asserting on a multipart body.
+    if (path === "/raw") {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      const raw = Buffer.concat(chunks).toString("latin1");
+      return send(res, 200, { data: { ct: req.headers["content-type"] ?? null, raw } });
+    }
+
     if (path === "/slow") {
       await new Promise((r) => setTimeout(r, 2000));
       return send(res, 200, { data: { slow: true } });

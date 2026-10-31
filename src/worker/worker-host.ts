@@ -11,6 +11,7 @@ import type {
 import { linkSignals } from "../internal/cancel";
 import { CoreClient } from "../internal/core-client";
 import { resolveBaseUrl } from "../internal/env";
+import { type FormEntries, formToEntries, isFormData, toFormData } from "../internal/body";
 import { callHook } from "../internal/hooks";
 import { applyTransforms, errorMessage, failedResult, markCanceled } from "../internal/result";
 import { storageFor } from "../internal/storage";
@@ -97,7 +98,10 @@ export class WorkerHost {
     const { serializable, beforeFunc } = splitConfig(config);
     let result: IRes<R>;
     try {
-      const payload = beforeFunc ? beforeFunc(body) : body;
+      const prepared = beforeFunc ? beforeFunc(body) : body;
+      // Built here, not in the worker: a URLSearchParams inside the object cannot be
+      // structured-cloned, and a bad field fails before the hop.
+      const payload = config?.isFormData === true ? toFormData(prepared) : prepared;
       // A ReadableStream cannot be structured-cloned; say so instead of a DataCloneError.
       if (typeof ReadableStream !== "undefined" && payload instanceof ReadableStream) {
         result = failedResult(
@@ -107,7 +111,7 @@ export class WorkerHost {
         );
       } else {
         result = await this.channel.call<IRes<R>>(
-          (id) => ({ kind: "request", id, method, url, body: payload, config: serializable }),
+          (id) => ({ kind: "request", id, method, url, ...packBody(payload), config: serializable }),
           signal,
         );
         // The transforms are functions: they couldn't cross the boundary, so they run here.
@@ -159,8 +163,11 @@ export class WorkerHost {
       (client) => client.login(body, config),
       async () => {
         const { serializable } = splitConfig(config);
-        const result = await this.channel
-          .call<IRes<R>>((id) => ({ kind: "login", id, body, config: serializable }))
+        const result = await Promise.resolve()
+          .then(() => (config?.isFormData === true ? toFormData(body) : body))
+          .then((payload) =>
+            this.channel.call<IRes<R>>((id) => ({ kind: "login", id, ...packBody(payload), config: serializable })),
+          )
           .catch((error: unknown) => toFailure<R>(error));
         // Transforms are functions: they couldn't cross the boundary, so they run here.
         applyTransforms(result as IRes<unknown>, (config ?? {}) as RequestConfig<unknown>);
@@ -237,6 +244,11 @@ export class WorkerHost {
 }
 
 /** A thrown RPC error as a result: an abort becomes a cancellation, anything else a client-side failure. */
+/** A `FormData` cannot be structured-cloned, so it crosses as entries and is rebuilt in the worker. */
+function packBody(payload: unknown): { body?: unknown; form?: FormEntries } {
+  return isFormData(payload) ? { form: formToEntries(payload as FormData) } : { body: payload };
+}
+
 function toFailure<R>(error: unknown): IRes<R> {
   const result = failedResult<R>(errorMessage(error, "Worker request failed"), error);
   if ((error as Error | undefined)?.name === "AbortError") markCanceled(result as IRes<unknown>, error);

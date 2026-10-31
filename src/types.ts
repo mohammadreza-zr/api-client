@@ -299,7 +299,12 @@ export interface RequestConfig<T = unknown>
   /** `JSON.stringify` the body. Default `true`. Ignored for FormData/Blob. */
   stringifyBody?: boolean;
 
-  /** Treat the body as FormData (drops `Content-Type` so the runtime sets the boundary). */
+  /**
+   * Send the body as multipart (drops `Content-Type` so the runtime sets the boundary).
+   * A plain-object body is converted to `FormData`: `File`/`Blob` values and arrays
+   * are appended as entries under the same key, `null`/`undefined` are skipped,
+   * a nested object becomes a JSON string and other values become text.
+   */
   isFormData?: boolean;
 
   /** Suppress the `onError` callback for this request. */

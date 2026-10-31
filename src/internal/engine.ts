@@ -8,6 +8,7 @@ import {
   isSelfDescribingBody,
   isSingleUseBody,
   parseBody,
+  toFormData,
 } from "./body";
 import { linkSignals } from "./cancel";
 import { assertFetchable } from "./env";
@@ -253,7 +254,9 @@ export async function executeRequest<R>(request: EngineRequest, ctx: EngineConte
     );
     assertFetchable(finalUrl);
 
-    const body = config.beforeFunc ? config.beforeFunc(request.body) : request.body;
+    const prepared = config.beforeFunc ? config.beforeFunc(request.body) : request.body;
+    // Built once, so a 401 retry resends the same FormData instead of re-reading the source object.
+    const body = config.isFormData === true ? toFormData(prepared) : prepared;
     const wantsAuth = !config.skipAuth && config.refreshTokenCheck !== false;
 
     // `uploadSkewMs` widens the window for long uploads that would outlive the token.

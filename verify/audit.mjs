@@ -82,6 +82,143 @@ try {
   check("FormData preserves file content", r5.data.text.includes("FILECONTENT"), r5.data.text.slice(0, 120));
   check("FormData preserves filename", r5.data.text.includes('filename="a.txt"'));
 
+  // isFormData: a plain object becomes multipart.
+  const r5b = await api.post(
+    "/upload",
+    {
+      name: "Ada",
+      age: 36,
+      active: false,
+      skipped: undefined,
+      nothing: null,
+      tags: ["a", "b"],
+      meta: { k: 1 },
+      avatar: new File(["AVATARBYTES"], "me.png", { type: "image/png" }),
+      docs: [new File(["DOC-ONE"], "one.txt"), new Blob(["DOC-TWO"], { type: "text/plain" })],
+    },
+    { isFormData: true },
+  );
+  const mp = String(r5b.data.text);
+  check(
+    "isFormData: plain object sent as multipart with boundary",
+    String(r5b.data.contentType).includes("multipart/form-data") && String(r5b.data.contentType).includes("boundary="),
+    `CT=${r5b.data.contentType}`,
+  );
+  const wire = state.lastRaw.toString("utf8");
+  const part = (name) => new RegExp(`name="${name}"(?:; filename="[^"]*")?\\r\\n(?:[^\\r\\n]+\\r\\n)*\\r\\n([^\\r]*)`).exec(wire)?.[1];
+  check("isFormData: strings and numbers become text fields", part("name") === "Ada" && part("age") === "36" && part("active") === "false");
+  check("isFormData: null and undefined are skipped", !/name="(skipped|nothing)"/.test(wire));
+  check("isFormData: array appends one entry per item", (wire.match(/name="tags"/g) ?? []).length === 2);
+  check("isFormData: nested object is a JSON string", part("meta") === '{"k":1}', String(part("meta")));
+  check(
+    "isFormData: File keeps its name and content",
+    wire.includes('name="avatar"; filename="me.png"') && wire.includes("AVATARBYTES") && wire.includes("image/png"),
+  );
+  check(
+    "isFormData: array of File/Blob appends every file",
+    (wire.match(/name="docs"/g) ?? []).length === 2 && wire.includes("DOC-ONE") && wire.includes("DOC-TWO"),
+  );
+  check("isFormData: no JSON body was sent", !mp.startsWith("{"), mp.slice(0, 40));
+
+  // Bytes stay bytes; an invalid date is skipped like JSON's null.
+  await api.post(
+    "/upload",
+    { bytes: new Uint8Array([72, 105, 33]), buf: new Uint8Array([1, 2]).buffer, bad: new Date("x"), when: new Date(0) },
+    { isFormData: true },
+  );
+  const wireBin = state.lastRaw.toString("latin1");
+  check("isFormData: typed array is sent as raw bytes", /name="bytes"[^]*?\r\n\r\nHi!\r\n/.test(wireBin) && !wireBin.includes('{"0"'));
+  check("isFormData: ArrayBuffer is sent as a 2-byte file part", /name="buf"[^]*?\r\n\r\n\x01\x02\r\n/.test(wireBin));
+  check("isFormData: an invalid Date is skipped, a valid one is ISO", !wireBin.includes('name="bad"') && wireBin.includes("1970-01-01T00:00:00.000Z"));
+
+  // ── isFormData edge cases ──
+  const send = async (body, config = {}, client = api) => {
+    const before = state.calls;
+    const res = await client.post("/upload", body, { isFormData: true, ...config });
+    return { res, sent: state.calls > before, wire: state.calls > before ? state.lastRaw.toString("latin1") : "" };
+  };
+
+  // A class instance may be a polyfilled FormData: it is the caller's to build, never rebuilt.
+  class Polyfill {
+    toString() {
+      return "POLYFILL-BODY";
+    }
+  }
+  const poly = await send(new Polyfill());
+  check("isFormData: a class instance is passed through untouched", poly.wire === "POLYFILL-BODY", poly.wire.slice(0, 60));
+
+  // A file or bytes hidden inside a nested object would be written as `{}`: fail loudly instead.
+  const nestedFile = await send({ user: { avatar: new File(["x"], "a.png") } });
+  check(
+    "isFormData: a File nested in an object fails, names the field and sends nothing",
+    nestedFile.res.status === false && !nestedFile.sent && /"user"/.test(nestedFile.res.message),
+    nestedFile.res.message,
+  );
+  const nestedBytes = await send({ meta: { raw: new Uint8Array([1]) } });
+  check("isFormData: bytes nested in an object fail loudly", nestedBytes.res.status === false && !nestedBytes.sent);
+  const circular = { name: "x" };
+  circular.self = { circular };
+  const cyc = await send({ circ: circular });
+  check("isFormData: a circular value fails with the field name", cyc.res.status === false && /"circ"/.test(cyc.res.message), cyc.res.message);
+
+  const misc = await send({
+    big: 12345678901234567890n,
+    nestedBig: { n: 7n },
+    fn: () => 1,
+    sym: Symbol("s"),
+    set: new Set(["a", "b"]),
+    map: { m: new Map([["k", 1]]) },
+    qs: new URLSearchParams({ a: "1", b: "2" }),
+    empty: [],
+    objs: [{ i: 1 }, { i: 2 }],
+    nan: NaN,
+    neg: -0,
+    zero: 0,
+    off: new Uint8Array([0, 1, 2, 3, 4, 5]).subarray(2, 4),
+  });
+  const field = (w, name) => new RegExp(`name="${name}"(?:; filename="[^"]*")?\\r\\n(?:[^\\r\\n]+\\r\\n)*\\r\\n([^]*?)\\r\\n--`).exec(w)?.[1];
+  check("isFormData: bigint becomes text", field(misc.wire, "big") === "12345678901234567890", String(field(misc.wire, "big")));
+  check("isFormData: bigint nested in an object is serialized", field(misc.wire, "nestedBig") === '{"n":"7"}', String(field(misc.wire, "nestedBig")));
+  check("isFormData: functions and symbols are skipped", !/name="(fn|sym)"/.test(misc.wire));
+  check("isFormData: a Set is appended item by item", (misc.wire.match(/name="set"/g) ?? []).length === 2);
+  check("isFormData: a Map nested in an object becomes an object", field(misc.wire, "map") === '{"m":{"k":1}}', String(field(misc.wire, "map")));
+  check("isFormData: URLSearchParams becomes its query string", field(misc.wire, "qs") === "a=1&b=2", String(field(misc.wire, "qs")));
+  check("isFormData: an empty array adds nothing", !/name="empty"/.test(misc.wire));
+  check("isFormData: an array of objects adds one JSON entry per item", (misc.wire.match(/name="objs"/g) ?? []).length === 2 && misc.wire.includes('{"i":2}'));
+  check("isFormData: NaN, 0 and -0 are text", field(misc.wire, "nan") === "NaN" && field(misc.wire, "zero") === "0" && field(misc.wire, "neg") === "0");
+  check("isFormData: a typed-array view sends only its own bytes", field(misc.wire, "off") === "\x02\x03", JSON.stringify(field(misc.wire, "off")));
+
+  const emptyObj = await send({});
+  check("isFormData: an empty object is an empty multipart body", emptyObj.res.status === true && String(emptyObj.res.data.contentType).includes("boundary="));
+
+  const viaBefore = await send({ ignored: 1 }, { beforeFunc: () => ({ from: "before", f: new Blob(["B"]) }) });
+  check("isFormData: beforeFunc output is converted", viaBefore.wire.includes('name="from"') && viaBefore.wire.includes('name="f"') && !viaBefore.wire.includes("ignored"));
+  const viaBeforeFd = await send({}, { beforeFunc: () => { const f = new FormData(); f.append("own", "1"); return f; } });
+  check("isFormData: beforeFunc returning a FormData is sent as is", viaBeforeFd.wire.includes('name="own"'));
+
+  const noStringify = await send({ a: "1" }, { stringifyBody: false });
+  check("isFormData wins over stringifyBody:false", noStringify.wire.includes('name="a"'));
+  const off = await api.post("/upload", { a: 1 }, { isFormData: false });
+  check("isFormData:false keeps a plain object as JSON", off.data.text === '{"a":1}', off.data.text);
+
+  // Content-Type: the runtime owns the boundary however the header got there.
+  const jsonDefault = createClient({ baseUrl: BASE, worker: false, throwError: false, headers: { "Content-Type": "application/json" } });
+  const jd = await send({ a: "1" }, {}, jsonDefault);
+  check("isFormData: a client-wide JSON Content-Type does not break the boundary", String(jd.res.data.contentType).includes("multipart/form-data; boundary="), String(jd.res.data.contentType));
+  const noBoundary = await send({ a: "1" }, { headers: { "Content-Type": "multipart/form-data" } });
+  check("isFormData: a hand-written multipart type without boundary is replaced", String(noBoundary.res.data.contentType).includes("boundary="), String(noBoundary.res.data.contentType));
+  jsonDefault.destroy();
+
+  // Without isFormData the same object is still JSON.
+  const r5c = await api.post("/upload", { a: 1 });
+  check("plain object without isFormData stays JSON", r5c.data.text === '{"a":1}', r5c.data.text);
+
+  // A string or a real FormData is not rebuilt.
+  const fd3 = new FormData();
+  fd3.append("x", "1");
+  const r5d = await api.post("/upload", fd3, { isFormData: true });
+  check("isFormData: a real FormData passes through", r5d.data.text.includes('name="x"'), r5d.data.text.slice(0, 80));
+
   // Explicit user Content-Type must win.
   const r6 = await api.post("/upload", new Uint8Array([1, 2]), {
     headers: { "Content-Type": "image/png" },
@@ -106,6 +243,13 @@ try {
   const r8 = await authed.post("/upload-401", fd2);
   check("FormData survives 401→refresh→retry", r8.status === true, `status=${r8.statusCode}`);
   check("retried FormData body not empty", r8.data?.byteLength > 0, `bytes=${r8.data?.byteLength}`);
+
+  // A plain-object multipart body survives 401 → refresh → retry.
+  const fd4 = { file: new File(["RETRYOBJ"], "c.txt"), n: 1 };
+  state.unauthorizedFirst = true;
+  const r9 = await authed.post("/upload-401", fd4, { isFormData: true });
+  check("isFormData object survives 401→refresh→retry", r9.status === true && r9.data?.byteLength > 0, `status=${r9.statusCode}`);
+  check("retried isFormData object is multipart", String(r9.data?.contentType).includes("multipart/form-data"), `CT=${r9.data?.contentType}`);
 
   // ── 2. react-query integration ────────────────────────
   console.log("\n\x1b[1m@tanstack/query-core integration\x1b[0m");

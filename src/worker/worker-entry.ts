@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import { CoreClient } from "../internal/core-client";
+import { entriesToForm } from "../internal/body";
 import { CancelError } from "../internal/cancel";
 import { redactTokens, tokenFieldNames } from "../internal/extract";
 import type { HostMessage, SerializableOptions, WorkerMessage } from "./protocol";
@@ -121,7 +122,7 @@ async function serve(active: CoreClient, msg: ClientMessage): Promise<void> {
       aborters.set(msg.id, controller);
       const config = { ...msg.config, signal: controller.signal } as RequestConfig<unknown>;
       try {
-        const result = await active.send(msg.method, msg.url, msg.body, config);
+        const result = await active.send(msg.method, msg.url, msg.form ? entriesToForm(msg.form) : msg.body, config);
         redact(active, result, active.isAuthEndpoint(msg.url, config));
         send({ kind: "result", id: msg.id, result });
       } finally {
@@ -130,7 +131,7 @@ async function serve(active: CoreClient, msg: ClientMessage): Promise<void> {
       return;
     }
     case "login": {
-      const result = await active.login(msg.body, msg.config as RequestConfig<unknown>);
+      const result = await active.login(msg.form ? entriesToForm(msg.form) : msg.body, msg.config as RequestConfig<unknown>);
       // The extractor already captured the tokens; the page gets the rest of the response.
       redact(active, result, true);
       return send({ kind: "result", id: msg.id, result });

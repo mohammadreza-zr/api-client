@@ -342,6 +342,84 @@ try {
     streamRes.message,
   );
 
+  // A plain-object body with isFormData is converted inside the worker.
+  const multipart = await csrfApi.post(
+    "/raw",
+    { name: "Ada", skipped: null, files: [new File(["W-ONE"], "one.txt"), new Blob(["W-TWO"])] },
+    { isFormData: true },
+  );
+  check(
+    "worker: isFormData object is sent as multipart",
+    String(multipart.data?.ct).includes("multipart/form-data; boundary="),
+    String(multipart.data?.ct),
+  );
+  check(
+    "worker: isFormData keeps text, skips null and appends every file",
+    multipart.data?.raw.includes('name="name"') &&
+      !multipart.data.raw.includes('name="skipped"') &&
+      (multipart.data.raw.match(/name="files"/g) ?? []).length === 2 &&
+      multipart.data.raw.includes("W-ONE") &&
+      multipart.data.raw.includes("W-TWO"),
+  );
+
+  // Values built in the page arrive in the worker as another realm's objects.
+  const wMix = await csrfApi.post(
+    "/raw",
+    {
+      bytes: new Uint8Array([72, 105, 33]),
+      buf: new Uint8Array([1, 2]).buffer,
+      when: new Date(0),
+      bad: new Date("x"),
+      set: new Set(["a", "b"]),
+      nested: { n: 7n, m: new Map([["k", 1]]), d: new Date(0) },
+      qs: new URLSearchParams({ a: "1" }),
+      skip: undefined,
+    },
+    { isFormData: true },
+  );
+  const wRaw = wMix.data?.raw ?? "";
+  check("worker: isFormData sends typed arrays as bytes", /name="bytes"[^]*?\r\n\r\nHi!\r\n/.test(wRaw) && !wRaw.includes('{"0"'), wMix.message);
+  check("worker: isFormData sends an ArrayBuffer as bytes", /name="buf"[^]*?\r\n\r\n\x01\x02\r\n/.test(wRaw));
+  check("worker: isFormData Date and invalid Date", wRaw.includes("1970-01-01T00:00:00.000Z") && !wRaw.includes('name="bad"'));
+  check("worker: isFormData Set is appended item by item", (wRaw.match(/name="set"/g) ?? []).length === 2);
+  check(
+    "worker: isFormData nested bigint, Map and Date",
+    wRaw.includes('{"n":"7","m":{"k":1},"d":"1970-01-01T00:00:00.000Z"}'),
+  );
+  check("worker: isFormData URLSearchParams", wRaw.includes("\r\n\r\na=1\r\n"));
+
+  // A real FormData cannot be structured-cloned; it crosses the boundary as entries.
+  const realForm = new FormData();
+  realForm.append("title", "T");
+  realForm.append("tags", "a");
+  realForm.append("tags", "b");
+  realForm.append("file", new File(["REAL-FILE-BYTES"], "real.txt", { type: "text/plain" }));
+  const wForm = await csrfApi.post("/raw", realForm);
+  const formRaw = wForm.data?.raw ?? "";
+  check("worker: a real FormData body is sent (it used to fail to clone)", wForm.status === true, wForm.message);
+  check(
+    "worker: FormData keeps repeated keys, file name, type and bytes in order",
+    (formRaw.match(/name="tags"/g) ?? []).length === 2 &&
+      formRaw.includes('name="file"; filename="real.txt"') &&
+      formRaw.includes("text/plain") &&
+      formRaw.includes("REAL-FILE-BYTES") &&
+      formRaw.indexOf('name="title"') < formRaw.indexOf('name="file"'),
+  );
+  check("worker: FormData content-type carries a boundary", String(wForm.data?.ct).includes("boundary="), String(wForm.data?.ct));
+
+  const wNested = await csrfApi.post("/raw", { user: { avatar: new File(["x"], "a.png") } }, { isFormData: true });
+  check(
+    "worker: a File nested in an object fails with a clear message",
+    wNested.status === false && /"user"/.test(wNested.message),
+    wNested.message,
+  );
+  const wStream = await csrfApi.post(
+    "/raw",
+    { s: new ReadableStream({ start: (c) => c.close() }) },
+    { isFormData: true },
+  );
+  check("worker: a stream inside an object fails instead of hanging", wStream.status === false, wStream.message);
+
   csrfApi.destroy();
 
   strict.destroy();
