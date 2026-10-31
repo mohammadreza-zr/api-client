@@ -119,17 +119,25 @@ export function toFormData(body: unknown): unknown {
 
 /**
  * A `FormData` as plain entries. A `FormData` itself cannot be structured-cloned
- * (`postMessage` throws a DataCloneError), but its strings and `File`s can.
+ * (`postMessage` throws a DataCloneError), but its strings and files can.
+ *
+ * The file name travels beside the value: some runtimes (Node 20/22) clone a
+ * `File` into a plain `Blob` and drop its name, which would upload it as "blob".
  */
-export type FormEntries = [name: string, value: string | Blob][];
+export type FormEntries = [name: string, value: string | Blob, filename?: string][];
 
 export function formToEntries(form: FormData): FormEntries {
-  return Array.from(form.entries());
+  return Array.from(form.entries(), ([name, value]): FormEntries[number] =>
+    typeof value === "string" ? [name, value] : [name, value, value.name],
+  );
 }
 
 export function entriesToForm(entries: FormEntries): FormData {
   const form = new FormData();
-  for (const [name, value] of entries) form.append(name, value);
+  for (const [name, value, filename] of entries) {
+    if (filename !== undefined && typeof value !== "string") form.append(name, value, filename);
+    else form.append(name, value);
+  }
   return form;
 }
 
