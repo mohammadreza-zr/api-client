@@ -3,7 +3,7 @@ import { hasBroadcastChannel, isServer } from "./env";
 /** Cross-tab messages. Tokens are never included. */
 export type TabMessage =
   | { type: "refreshed"; tabId: string; expiresAt: number | null }
-  | { type: "logout"; tabId: string }
+  | { type: "logout"; tabId: string; expired?: boolean }
   | { type: "login"; tabId: string; expiresAt: number | null };
 
 interface LockManagerLike {

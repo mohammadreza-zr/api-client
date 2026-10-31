@@ -76,6 +76,20 @@ try {
   check("in-flight refresh reports failure after logout", (await inFlight) === false);
   check("logout is not undone by an in-flight refresh", (await racy.getAuthState()).isAuthenticated === false);
 
+  state.refreshMode = "reject";
+  const expiring = client();
+  await expiring.setTokens({ accessToken: "old", refreshToken: "r" });
+  check("a live session is not flagged expired", (await expiring.getAuthState()).sessionExpired === false);
+  await expiring.get("/private");
+  const gone = await expiring.getAuthState();
+  check("a rejected refresh flags the session as expired", gone.isAuthenticated === false && gone.sessionExpired === true);
+  state.refreshMode = "ok";
+  await expiring.setTokens({ accessToken: "new", refreshToken: "r2" });
+  check("a new session clears the expired flag", (await expiring.getAuthState()).sessionExpired === false);
+  await expiring.logout();
+  check("[documented] a user logout is not an expiry", (await expiring.getAuthState()).sessionExpired === false);
+  expiring.destroy();
+
   state.refreshMode = "ok";
   state.refreshCsrf.length = 0;
   const csrfRefresh = client({ getCsrfToken: () => "csrf-refresh" });
@@ -289,6 +303,7 @@ try {
   await cookieB.get("/private");
   await sleep(50);
   check("cookie mode: a rejected refresh in any tab ends the shared session everywhere", (await cookieA.getAuthState()).isAuthenticated === false);
+  check("…and the other tab learns it was an expiry", (await cookieA.getAuthState()).sessionExpired === true);
   state.refreshMode = "ok";
   [cookieA, cookieB].forEach((tab) => tab.destroy());
 

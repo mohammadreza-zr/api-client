@@ -400,6 +400,14 @@ export interface SocketTokenOptions extends RequestConfig<unknown> {
 /** Auth state broadcast to the app. Never contains tokens. */
 export interface AuthState {
   isAuthenticated: boolean;
+  /**
+   * `true` once the session was ended by the server: the refresh endpoint
+   * rejected the refresh token (401/403), here or in another tab. Tells "your
+   * session expired" apart from a user-initiated logout or a never-signed-in
+   * visitor, so the app can redirect to login with a message. Reset to `false`
+   * by the next login, `setTokens()` or successful session restore.
+   */
+  sessionExpired: boolean;
   /** Epoch ms of access-token expiry, when known. */
   expiresAt: number | null;
   /** Whatever the login/refresh endpoint returned as `user`. */

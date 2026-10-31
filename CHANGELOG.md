@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`AuthState.sessionExpired`.** Becomes `true` when the refresh endpoint
+  rejects the session (401/403), in this tab or a sibling one, so the app can
+  tell "your session expired" apart from a user logout or a first visit. It
+  resets on the next login, `setTokens()` or restored session. Read it from
+  `onAuthStateChange` / `getAuthState()`.
+
 ## 3.0.2 - 2026-10-04
 
 ### Fixed

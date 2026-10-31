@@ -22,6 +22,9 @@ export class AuthStore {
    */
   private session = false;
 
+  /** Set when the server rejected the session; cleared as soon as one starts again. */
+  private expired = false;
+
   /**
    * Bumped whenever the session is replaced or ended. A refresh that started
    * under an older generation must not write its result back: that would
@@ -80,6 +83,7 @@ export class AuthStore {
       // An expired access token with a refresh token is still a live session:
       // the next request refreshes silently, so the app must not redirect to login.
       isAuthenticated: this.session || Boolean(this.refresh) || (Boolean(this.access) && !this.isExpired()),
+      sessionExpired: this.expired,
       expiresAt: this.expiry,
       user: this.user,
     };
@@ -93,6 +97,7 @@ export class AuthStore {
   markSession(active: boolean): void {
     if (this.session === active) return;
     this.session = active;
+    if (active) this.expired = false;
     this.emit();
   }
 
@@ -115,6 +120,7 @@ export class AuthStore {
    * new opaque token has no known expiry, so it never inherits the old one.
    */
   apply(tokens: TokenPair, persist = true): void {
+    this.expired = false;
     if (tokens.refreshToken !== undefined) this.refresh = tokens.refreshToken;
     if (tokens.accessToken !== undefined) {
       this.access = tokens.accessToken;
@@ -166,8 +172,10 @@ export class AuthStore {
     this.apply(tokens);
   }
 
-  clear(persist = true): void {
+  /** Ends the session. `expired` records that the server, not the user, ended it. */
+  clear(persist = true, expired = false): void {
     this.sessionGeneration++;
+    this.expired = expired;
     this.access = undefined;
     this.refresh = undefined;
     this.expiry = null;

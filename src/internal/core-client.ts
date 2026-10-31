@@ -101,11 +101,11 @@ export class CoreClient {
 
   // ── cross-tab ──────────────────────────────────────────
 
-  private onTabMessage(msg: { type: string; expiresAt?: number | null }): void {
+  private onTabMessage(msg: { type: string; expiresAt?: number | null; expired?: boolean }): void {
     if (this.disposed) return;
 
     if (msg.type === "logout") {
-      this.auth.clear();
+      this.auth.clear(true, msg.expired === true);
       callHook(this.hooks.onAuthFailure);
       return;
     }
@@ -188,8 +188,8 @@ export class CoreClient {
     // credentials proves nothing about the others; in cookie mode every tab sends
     // the same cookie, so the server's rejection is the verdict for all of them.
     const broadcast = this.sharedSession && (this.opts.authMode === "cookie" || this.auth.hasCredentials);
-    this.auth.clear();
-    if (broadcast) this.tabs.post({ type: "logout", tabId: this.tabs.tabId });
+    this.auth.clear(true, true);
+    if (broadcast) this.tabs.post({ type: "logout", tabId: this.tabs.tabId, expired: true });
     callHook(this.hooks.onAuthFailure);
   }
 

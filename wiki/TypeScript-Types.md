@@ -234,6 +234,7 @@ data?.count;    // number
 ```ts
 interface AuthState {
   isAuthenticated: boolean;
+  sessionExpired: boolean; // true when the server (refresh rejected) ended the session
   expiresAt: number | null;
   user?: unknown;
 }

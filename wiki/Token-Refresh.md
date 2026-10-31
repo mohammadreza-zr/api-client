@@ -200,7 +200,7 @@ When refresh fails permanently:
 1. Tokens are cleared.
 2. `logout` is broadcast — every other tab clears too.
 3. `onAuthFailure()` fires.
-4. `onAuthStateChange` emits `{ isAuthenticated: false }`.
+4. `onAuthStateChange` emits `{ isAuthenticated: false, sessionExpired: true }`. The flag is `true` only when the server ended the session (here or in another tab); a user logout leaves it `false`. It resets on the next login or `setTokens()`.
 5. The original request's result (usually the 401) is returned or thrown.
 
 ```ts
@@ -209,6 +209,11 @@ createClient({
     queryClient.clear();
     router.push("/login?reason=session-expired");
   },
+});
+
+// or react to the state, which also tells expiry apart from a plain logout
+api.onAuthStateChange(({ isAuthenticated, sessionExpired }) => {
+  if (!isAuthenticated && sessionExpired) router.push("/login?reason=session-expired");
 });
 ```
 
